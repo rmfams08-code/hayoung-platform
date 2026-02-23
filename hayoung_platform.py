@@ -90,34 +90,31 @@ st.markdown("""
 # --- 3. 데이터베이스 로직 (CSV 파일 저장 방식) ---
 DB_FILE = "hayoung_data.csv"
 
-# 데이터 불러오기 함수
 def load_data():
     try:
-        # 파일이 있으면 읽어오고, 없으면 기본 틀을 만듭니다.
+        # 파일이 있으면 읽어오고
         return pd.read_csv(DB_FILE)
     except FileNotFoundError:
-        # 파일이 없을 때 생성할 기본 컬럼(열)
+        # 파일이 없으면 빈 틀을 만듭니다.
         columns = ["날짜", "학교명", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", 
                    "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
         return pd.DataFrame(columns=columns)
 
-# 데이터 저장하기 함수
 def save_data(new_row):
     df = load_data()
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     df.to_csv(DB_FILE, index=False)
 
-# [핵심] 파일에서 데이터를 읽어와서 계산을 시작합니다.
+# [수정된 핵심 줄] 이제 세션 상태가 아니라 함수에서 데이터를 직접 가져옵니다.
 df_all = load_data()
 
-# 데이터가 비어있지 않을 때만 계산 실행 (에러 방지)
+# 데이터가 비어있지 않을 때만 계산 실행
 if not df_all.empty:
     df_all['음식물비용'] = df_all['음식물(kg)'] * df_all['단가(원)']
     df_all['사업장비용'] = df_all['사업장(kg)'] * df_all['사업장단가(원)']
     df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].str[:7]
-    # 탄소감축량 계산도 잊지 말고 넣어줍니다.
     df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
 
 # 현재 데이터 상태를 세션(메모리)에 동기화
