@@ -1,14 +1,13 @@
 # 이 코드는 파이썬으로 웹 화면을 만들어주는 '스트림릿(Streamlit)' 라이브러리를 사용합니다.
 # 실행 방법: cd Desktop\하영자원 입력 후 python -m streamlit run hayoung_platform.py 실행
 
-# 이 코드는 파이썬으로 웹 화면을 만들어주는 '스트림릿(Streamlit)' 라이브러리를 사용합니다.
-# 실행 방법: cd Desktop\하영자원 입력 후 python -m streamlit run hayoung_platform.py 실행
 
 import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime
-import streamlit.components.v1 as components # [추가된 부분] 웹 통계 등 특수 기능을 쓰기 위한 도구 모음
+import streamlit.components.v1 as components
+import io  # [추가] 메모리 안에서 파일을 만들기 위한 도구
 
 # --- 1. 페이지 및 기본 설정 ---
 st.set_page_config(
@@ -358,15 +357,29 @@ elif role == "🏫 학교 담당자 (행정실)":
             st.markdown("<div style='text-align:center; font-weight:bold; color:#34a853;'>♻️ 재활용 수거량</div>", unsafe_allow_html=True)
             st.bar_chart(chart_df_monthly['재활용(kg)'], color="#34a853")
 
-    # 3. 행정 서류 출력 및 연동 자동화
+    # --- 수정된 행정 서류 출력 부분 ---
     st.write("---")
     st.subheader("🖨️ 행정 증빙 서류 자동 출력 및 올바로시스템 연동")
     
-    # 1번째 줄: 기존 서류 출력 기능
+    # 엑셀 파일로 변환하는 함수 (빠른 모드용 핵심 로직)
+    def convert_df_to_excel(df):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='실적보고서')
+        return output.getvalue()
+
+    excel_data = convert_df_to_excel(df_school)
+
     col_doc1, col_doc2, col_doc3 = st.columns(3)
     with col_doc1:
-        if st.button("📄 음식물/사업장 실적보고서", use_container_width=True):
-            st.success("환경부 양식 다운로드 완료!")
+        # [수정] 일반 버튼에서 다운로드 버튼으로 변경
+        st.download_button(
+            label="📄 음식물/사업장 실적보고서",
+            data=excel_data,
+            file_name=f"{datetime.now().strftime('%Y%m%d')}_화성초_실적보고서.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
     with col_doc2:
         if st.button("📄 재활용 수익 상계처리 증빙서", use_container_width=True):
             st.success("감사 대비용 상계증빙서 다운로드 완료!")
