@@ -103,9 +103,10 @@ def save_data(new_row):
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     df.to_csv(DB_FILE, index=False)
 
-# 데이터 불러오기 및 자동 계산
+# --- 데이터 불러오기 및 자동 계산 부분 수정 ---
 df_all = load_data()
 
+# 데이터가 비어있지 않을 때만 계산 실행
 if not df_all.empty:
     df_all['음식물비용'] = df_all['음식물(kg)'] * df_all['단가(원)']
     df_all['사업장비용'] = df_all['사업장(kg)'] * df_all['사업장단가(원)']
@@ -113,6 +114,10 @@ if not df_all.empty:
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].str[:7]
     df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
+else:
+    # [중요] 데이터가 아예 없을 때 에러 방지용 빈 표(컬럼) 만들기
+    cols = ["날짜", "학교명", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "탄소감축량(kg)"]
+    df_all = pd.DataFrame(columns=cols)
 
 # --- 3. 사이드바 메뉴 ---
 with st.sidebar:
