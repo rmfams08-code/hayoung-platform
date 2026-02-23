@@ -1,10 +1,14 @@
 # 이 코드는 파이썬으로 웹 화면을 만들어주는 '스트림릿(Streamlit)' 라이브러리를 사용합니다.
 # 실행 방법: cd Desktop\하영자원 입력 후 python -m streamlit run hayoung_platform.py 실행
 
+# 이 코드는 파이썬으로 웹 화면을 만들어주는 '스트림릿(Streamlit)' 라이브러리를 사용합니다.
+# 실행 방법: cd Desktop\하영자원 입력 후 python -m streamlit run hayoung_platform.py 실행
+
 import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime
+import streamlit.components.v1 as components # [추가된 부분] 웹 통계 등 특수 기능을 쓰기 위한 도구 모음
 
 # --- 1. 페이지 및 기본 설정 ---
 st.set_page_config(
@@ -13,6 +17,31 @@ st.set_page_config(
     layout="wide", # 화면 넓게 쓰기
     initial_sidebar_state="expanded"
 )
+
+# --- [추가된 부분] 구글 애널리틱스 (방문자 통계) 연동 코드 시작 ---
+# 파이썬(Streamlit) 환경에서 구글 애널리틱스 센서가 정상적으로 작동하도록 변환한 코드입니다.
+ga_code = """
+<script>
+    // 구글 애널리틱스 외부 스크립트 불러오기 (부모 창에 적용)
+    var script = window.parent.document.createElement('script');
+    script.src = "https://www.googletagmanager.com/gtag/js?id=G-DNFFMVMQLT";
+    script.async = true;
+    window.parent.document.head.appendChild(script);
+
+    // 구글 애널리틱스 설정 코드 실행
+    var script2 = window.parent.document.createElement('script');
+    script2.innerHTML = `
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-DNFFMVMQLT');
+    `;
+    window.parent.document.head.appendChild(script2);
+</script>
+"""
+# 변환된 코드를 화면에 보이지 않게(크기 0) 백그라운드에서 실행시킵니다.
+components.html(ga_code, width=0, height=0)
+# --- 구글 애널리틱스 연동 코드 끝 ---
 
 # --- 구글 크롬 자동 번역 방지 명령어 ---
 # 브라우저가 멋대로 이상한 한글로 번역하는 것을 막아줍니다.
@@ -419,7 +448,7 @@ elif role == "🚚 수거 기사 (현장 앱)":
         
         if st.button("본사로 수거량 전송하기", type="primary", use_container_width=True):
             if food_w > 0 or biz_w > 0 or re_w > 0:
-                with st.spinner("본사 서버로 전송 중..."):
+                with 단말기_전송_중("본사 서버로 전송 중..."):
                     time.sleep(1)
                 st.success("전송 완료! 행정실과 본사 정산 시스템에 즉시 반영되었습니다.")
             else:
