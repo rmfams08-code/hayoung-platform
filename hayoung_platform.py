@@ -45,6 +45,28 @@ STUDENT_COUNTS = {
 }
 SCHOOL_LIST = sorted(list(STUDENT_COUNTS.keys()))
 
+# ============================================================
+# 실제 수거 데이터 내장 (2025년 3~12월 엑셀 원본)
+# 형식: (날짜, 학교명, 음식물_L, 단가)
+# ============================================================
+REAL_COLLECTION_DATA = [
+    ("2025-03-05","강남중학교",140.0,190),("2025-03-07","강남중학교",180.0,190),("2025-03-11","강남중학교",120.0,190),("2025-03-13","강남중학교",180.0,190),("2025-03-14","강남중학교",120.0,190),("2025-03-17","강남중학교",140.0,190),("2025-03-18","강남중학교",120.0,190),("2025-03-19","강남중학교",160.0,190),("2025-03-20","강남중학교",140.0,190),("2025-03-21","강남중학교",100.0,190),("2025-03-24","강남중학교",120.0,190),("2025-03-25","강남중학교",120.0,190),("2025-03-26","강남중학교",140.0,190),("2025-03-27","강남중학교",120.0,190),("2025-03-28","강남중학교",120.0,190),
+    ("2025-04-01","강남중학교",120.0,190),("2025-04-02","강남중학교",140.0,190),("2025-04-03","강남중학교",110.0,190),("2025-04-04","강남중학교",120.0,190),("2025-04-07","강남중학교",140.0,190),("2025-04-08","강남중학교",120.0,190),("2025-04-09","강남중학교",100.0,190),("2025-04-10","강남중학교",140.0,190),("2025-04-11","강남중학교",120.0,190),("2025-04-14","강남중학교",120.0,190),("2025-04-15","강남중학교",120.0,190),("2025-04-16","강남중학교",140.0,190),("2025-04-17","강남중학교",100.0,190),("2025-04-18","강남중학교",120.0,190),("2025-04-21","강남중학교",120.0,190),("2025-04-22","강남중학교",140.0,190),("2025-04-23","강남중학교",120.0,190),("2025-04-24","강남중학교",100.0,190),("2025-04-25","강남중학교",120.0,190),("2025-04-28","강남중학교",120.0,190),("2025-04-29","강남중학교",130.0,190),("2025-04-30","강남중학교",110.0,190),
+]
+
+# 내장 데이터 로딩 함수
+def _load_embedded_data():
+    """real_data_embedded.py 파일이 있으면 로드, 없으면 REAL_COLLECTION_DATA 사용"""
+    import os
+    embed_path = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else ".", "real_data_embedded.py")
+    if os.path.exists(embed_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("real_data_embedded", embed_path)
+        mod  = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.REAL_COLLECTION_DATA
+    return REAL_COLLECTION_DATA
+
 # [추가2] 재활용품 23종 기본 시세 (원/kg) - 실제 시장 기준값
 RECYCLE_ITEMS_DEFAULT = {
     "폐지(골판지)": 80,   "폐지(신문지)": 60,   "폐지(혼합)": 40,
@@ -200,27 +222,38 @@ def init_db():
 
     conn.commit()
 
-    # 샘플 수거 데이터
+    # 실제 수거 데이터 (2025년 3~12월 엑셀 원본 내장)
     if c.execute("SELECT COUNT(*) FROM collections").fetchone()[0] == 0:
+        src_data = _load_embedded_data()  # (날짜, 학교명, 음식물L, 단가) 리스트
         rows = []
-        for year in [2024, 2025, 2026]:
-            months = [(11,30),(12,31)] if year != 2026 else [(1,31),(2,25)]
-            for month, days in months:
-                for day in range(1, days+1, 3):
-                    if day % 7 in [0, 1]: continue
-                    for school, cnt in STUDENT_COUNTS.items():
-                        rows.append((
-                            f"{year}-{month:02d}-{day:02d} {random.randint(8,15):02d}:{random.randint(0,59):02d}:00",
-                            school, cnt, "하영자원(본사 직영)",
-                            int(cnt*random.uniform(0.1,0.2)),
-                            int(cnt*random.uniform(0.05,0.1)),
-                            int(cnt*random.uniform(0.02,0.05)),
-                            "정산완료" if year != 2026 else "정산대기", ""
-                        ))
+        price_map = {}  # 학교별 마지막 단가 추적
+
+        for date_str, school, liter, price in src_data:
+            rows.append((
+                date_str + " 09:00:00",
+                school,
+                STUDENT_COUNTS.get(school, 0),
+                "하영자원(본사 직영)",
+                liter,   # 음식물_kg (1L=1kg)
+                0.0,     # 재활용_kg
+                0.0,     # 사업장_kg
+                "정산완료",
+                ""
+            ))
+            if price > 0:
+                price_map[school] = (price, date_str)
+
         c.executemany("""
             INSERT INTO collections (날짜,학교명,학생수,수거업체,음식물_kg,재활용_kg,사업장_kg,상태,현장사진)
             VALUES (?,?,?,?,?,?,?,?,?)
         """, rows)
+
+        # 학교별 단가 반영
+        for school, (price, date_str) in price_map.items():
+            c.execute(
+                "UPDATE school_prices SET 음식물단가=?, updated_at=? WHERE 학교명=?",
+                (price, date_str, school)
+            )
 
     # 샘플 일정 (이번달)
     if c.execute("SELECT COUNT(*) FROM schedules").fetchone()[0] == 0:
