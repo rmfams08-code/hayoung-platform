@@ -371,6 +371,199 @@ def init_db():
     conn.commit()
     conn.close()
 
+# ============================================================
+# [전자계약] contracts(계약) 테이블 초기화 함수
+# ============================================================
+def init_contract_db():
+    """
+    hayoung_v3.db 에 contracts(계약) 테이블을 생성하고
+    비어있을 경우 테스트 데이터 2건을 삽입하는 함수
+    """
+    conn = get_conn()          # 기존 DB(데이터베이스) 연결 함수 재사용
+    c = conn.cursor()          # cursor(커서) = SQL 명령을 실행하는 도구
+
+    # IF NOT EXISTS: 이미 테이블이 있으면 다시 만들지 않음 (중복 방지)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS contracts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            school_name  TEXT    NOT NULL,
+            start_date   TEXT    NOT NULL,
+            end_date     TEXT    NOT NULL,
+            total_amount INTEGER NOT NULL,
+            status       TEXT    NOT NULL
+                         CHECK(status IN ('서명대기', '계약완료')),
+            pdf_path     TEXT    DEFAULT NULL
+        )
+    """)
+    conn.commit()              # commit(커밋): 변경사항을 DB에 최종 저장
+
+    # COUNT(*): 전체 행(row) 개수를 셈 → 0이면 테이블이 비어있다는 뜻
+    row_count = c.execute("SELECT COUNT(*) FROM contracts").fetchone()[0]
+
+    if row_count == 0:         # 테이블이 완전히 비어있을 때만 테스트 데이터 삽입
+        test_data = [
+            ("강남중학교",   "2025-03-01", "2026-02-28", 3600000, "서명대기"),
+            ("부림초등학교", "2025-03-01", "2026-02-28", 2880000, "서명대기"),
+        ]
+        c.executemany("""
+            INSERT INTO contracts (school_name, start_date, end_date, total_amount, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, test_data)
+        conn.commit()
+
+    conn.close()               # DB 연결 종료 (메모리 반환)
+
+
+# ============================================================
+# [전자계약] PDF 생성 함수
+# 필수 설치: pip install reportlab
+# ============================================================
+def generate_contract_pdf(contract_row: dict) -> str:
+    """
+    계약서 PDF를 생성하고 저장 경로(문자열)를 반환하는 함수
+    contract_row: contracts 테이블에서 가져온 딕셔너리(dict) 1건
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # ── 폰트(글꼴) 등록 ─────────────────────────────────────
+    FONT_NAME = "Helvetica"                                     # 기본 폰트 (한글 깨짐 가능)
+    _font_paths = [
+        ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf"),        # 맑은 고딕 (Windows 기본)
+        ("NanumGothic",  "C:/Windows/Fonts/NanumGothic.ttf"),   # 나눔고딕 (설치 시)
+    ]
+    for font_id, font_path in _font_paths:
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont(font_id, font_path))
+            FONT_NAME = font_id
+            break
+    # 두 경로 모두 없으면 FONT_NAME = "Helvetica" 유지 → 한글 깨짐 주의
+
+    # ── 저장 폴더(directory) 생성 ───────────────────────────
+    # __file__ 이 없는 환경(streamlit cloud 등) 대비 안전 처리
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        base_dir = os.getcwd()
+    output_dir = os.path.join(base_dir, "contracts_pdf")
+    os.makedirs(output_dir, exist_ok=True)                      # 폴더 없으면 자동 생성
+
+    # ── 파일명 및 경로 설정 ─────────────────────────────────
+    school_name = contract_row["school_name"]
+    today_str   = date.today().strftime("%Y%m%d")
+    file_name   = f"계약서_{school_name}_{today_str}.pdf"
+    file_path   = os.path.join(output_dir, file_name)
+
+    # ── PDF 문서(document) 생성 ─────────────────────────────
+    doc = SimpleDocTemplate(
+        file_path,
+        pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm,
+        topMargin=25*mm,  bottomMargin=20*mm
+    )
+
+    # ── 스타일(style) 정의 ──────────────────────────────────
+    style_title = ParagraphStyle(
+        "ContractTitle",
+        fontName=FONT_NAME, fontSize=18, alignment=1,
+        spaceAfter=10, leading=26
+    )
+    style_body = ParagraphStyle(
+        "ContractBody",
+        fontName=FONT_NAME, fontSize=11, alignment=0,
+        spaceAfter=6, leading=18
+    )
+    style_sign = ParagraphStyle(
+        "ContractSign",
+        fontName=FONT_NAME, fontSize=12, alignment=2,
+        spaceAfter=6, leading=20
+    )
+
+    # ── 콘텐츠(content) 목록 구성 ───────────────────────────
+    story = []
+
+    # 제목
+    story.append(Paragraph("폐기물 수거 및 처리 용역 전자계약서", style_title))
+    story.append(Spacer(1, 8*mm))
+
+    # 전문
+    story.append(Paragraph(
+        f"발주처 {school_name}(이하 '甲')과 수급인 하영자원(이하 '乙')은 아래와 같이 폐기물 수거 및 처리 용역 계약을 체결한다.",
+        style_body
+    ))
+    story.append(Spacer(1, 6*mm))
+
+    # 본문 표(Table)
+    amount_str = f"{contract_row['total_amount']:,} 원"
+    period_str = f"{contract_row['start_date']} ~ {contract_row['end_date']}"
+    table_data = [
+        ["항  목",      "내  용"],
+        ["계약 학교명", school_name],
+        ["계약 기간",   period_str],
+        ["총 계약금액", amount_str],
+        ["계약 종류",   "폐기물 수거 및 처리 용역"],
+        ["계약 방식",   "전자계약 (나라장터 G2B 방식 준용)"],
+    ]
+    tbl = Table(table_data, colWidths=[50*mm, 110*mm])
+    tbl.setStyle(TableStyle([
+        ("FONTNAME",       (0,0), (-1,-1), FONT_NAME),
+        ("FONTSIZE",       (0,0), (-1,-1), 11),
+        ("BACKGROUND",     (0,0), (-1, 0), colors.HexColor("#1a73e8")),
+        ("TEXTCOLOR",      (0,0), (-1, 0), colors.white),
+        ("FONTSIZE",       (0,0), (-1, 0), 12),
+        ("ALIGN",          (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f0f7ff")]),
+        ("GRID",           (0,0), (-1,-1), 0.5, colors.grey),
+        ("ROWHEIGHT",      (0,0), (-1,-1), 9*mm),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 15*mm))
+
+    # 계약 조항
+    story.append(Paragraph("제1조 (목적) 본 계약은 甲의 발주에 따라 乙이 폐기물 수거 및 처리 용역을 성실히 이행함을 목적으로 한다.", style_body))
+    story.append(Paragraph("제2조 (계약금액) 계약금액은 위 표에 기재된 금액으로 하며, 관련 법령에 따른 부가가치세를 포함한다.", style_body))
+    story.append(Paragraph("제3조 (전자서명) 본 계약은 전자서명법에 따른 전자서명으로 체결되며 종이 계약서와 동일한 법적 효력을 가진다.", style_body))
+    story.append(Spacer(1, 12*mm))
+
+    # 서명 날짜
+    story.append(Paragraph(f"계약 체결일: {date.today().strftime('%Y년 %m월 %d일')}", style_sign))
+    story.append(Spacer(1, 8*mm))
+
+    # ── 서명란 (도장 이미지 또는 텍스트 대체) ────────────────
+    stamp_path = os.path.join(base_dir, "stamp.png")
+    sign_data = [
+        [f"발주처: {school_name} (인)", "수급인: 하영자원 대표자"],
+        ["", ""],
+    ]
+    if os.path.exists(stamp_path):
+        stamp_img = Image(stamp_path, width=18*mm, height=18*mm)
+        sign_data[1] = ["", stamp_img]
+    else:
+        sign_data[1] = ["", Paragraph("[직인]", style_sign)]
+
+    sign_tbl = Table(sign_data, colWidths=[80*mm, 80*mm])
+    sign_tbl.setStyle(TableStyle([
+        ("FONTNAME",  (0,0), (-1,-1), FONT_NAME),
+        ("FONTSIZE",  (0,0), (-1,-1), 12),
+        ("ALIGN",     (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",    (0,0), (-1,-1), "MIDDLE"),
+        ("BOX",       (0,0), (0,-1),  0.5, colors.grey),
+        ("BOX",       (1,0), (1,-1),  0.5, colors.grey),
+        ("ROWHEIGHT", (0,0), (-1,-1), 12*mm),
+    ]))
+    story.append(sign_tbl)
+
+    # ── PDF 최종 빌드(build) = 파일로 저장 ──────────────────
+    doc.build(story)
+    return file_path                                            # 저장된 PDF 경로 반환
+
+
 # ── 헬퍼 함수 ──────────────────────────────────────────────
 def get_setting(key):
     conn = get_conn()
@@ -542,6 +735,7 @@ def send_kakao_alimtalk(phone, school, food_kg, total_price):
 # DB 초기화 + 데이터 로드
 # ============================================================
 init_db()
+init_contract_db()   # [전자계약] contracts 테이블 초기화 — 앱 시작 시 자동 실행
 df_all = load_data()
 
 # ============================================================
@@ -674,14 +868,27 @@ with st.sidebar:
     st.success("✅ SQLite DB (WAL모드)")
     st.caption("v3: 재활용시세·스쿨존·캘린더·교육청모드")
 
-# ── 로그인 정보 기반 role 매핑 ──
+# ── 로그인 정보 기반 role(역할) 매핑 ──────────────────────────
 _role_map = {
     "관리자":   "🏢 관리자 (본사 관제)",
-    "학교":     "🏫 학교 담당자 (행정실)",
     "수거기사": "🚚 수거 기사 (현장 앱)",
     "교육청":   "🏛️ 교육청 관제 (신규)",
 }
-role = _role_map.get(st.session_state.user_role, "🏢 관리자 (본사 관제)")
+# 학교·관리자 역할은 사이드바(sidebar)에서 메뉴 선택 가능
+if st.session_state.user_role == "학교":
+    role = st.sidebar.radio(
+        "메뉴 선택",
+        ["🏫 학교 담당자 (행정실)", "📑 전자계약 시스템"],
+        label_visibility="collapsed"
+    )
+elif st.session_state.user_role == "관리자":
+    role = st.sidebar.radio(
+        "메뉴 선택",
+        ["🏢 관리자 (본사 관제)", "📑 전자계약 시스템"],
+        label_visibility="collapsed"
+    )
+else:
+    role = _role_map.get(st.session_state.user_role, "🏢 관리자 (본사 관제)")
 
 # ============================================================
 # [모드 1] 관리자 (본사 관제)
@@ -1490,4 +1697,148 @@ elif role == "🏛️ 교육청 관제 (신규)":
                     file_name=f"{sel_edu}_수거실적보고서_{datetime.now().strftime('%Y-%m')}.xlsx",
                     use_container_width=True
                 )
+
+
+# ============================================================
+# [전자계약 시스템] 📑 탭 UI
+# ============================================================
+elif role == "📑 전자계약 시스템":
+    st.title("📑 전자계약 시스템")
+    st.markdown("<p style='color:#5f6368;font-size:16px;'>나라장터(G2B) 방식의 전자계약 시뮬레이션입니다.</p>", unsafe_allow_html=True)
+
+    # ── 접근 권한(permission) 체크 ──────────────────────────
+    _user_role = st.session_state.user_role                     # 현재 로그인 역할
+    if _user_role not in ["관리자", "학교"]:                    # 관리자·학교 외 접근 차단
+        st.warning("⚠️ 이 메뉴는 관리자 및 학교 담당자만 접근할 수 있습니다.")
+        st.stop()
+
+    # ── DB에서 계약 목록 불러오기 ───────────────────────────
+    _conn = get_conn()
+    df_contracts = pd.read_sql_query(
+        "SELECT * FROM contracts ORDER BY id DESC", _conn
+    )
+    _conn.close()
+
+    # ── 서명대기 목록 표시 ──────────────────────────────────
+    st.subheader("📋 서명 대기 계약 목록")
+    df_waiting = df_contracts[df_contracts["status"] == "서명대기"].copy()
+
+    if df_waiting.empty:
+        st.info("현재 서명 대기 중인 계약이 없습니다.")
+    else:
+        df_waiting_display = df_waiting.rename(columns={
+            "id":           "번호",
+            "school_name":  "학교명",
+            "start_date":   "시작일",
+            "end_date":     "종료일",
+            "total_amount": "계약금액(원)",
+            "status":       "상태",
+        })[["번호","학교명","시작일","종료일","계약금액(원)","상태"]]
+        st.dataframe(df_waiting_display, use_container_width=True)
+
+        # ── 서명할 계약 선택 ────────────────────────────────
+        st.subheader("✍️ 전자서명 진행")
+        waiting_schools = df_waiting["school_name"].tolist()
+
+        # 학교 계정이면 본인 학교만 선택 가능
+        if _user_role == "학교":
+            my_org = st.session_state.user_org
+            waiting_schools = [s for s in waiting_schools if s == my_org]
+            if not waiting_schools:
+                st.info("귀교에 해당하는 서명 대기 계약이 없습니다.")
+                st.stop()
+
+        selected_school = st.selectbox("서명할 학교 선택", waiting_schools)
+
+        # 선택된 계약 상세 정보 표시
+        sel_row = df_waiting[df_waiting["school_name"] == selected_school].iloc[0]
+        col_a, col_b, col_c = st.columns(3)
+        with col_a: st.metric("학교명",   sel_row["school_name"])
+        with col_b: st.metric("계약금액", f"{sel_row['total_amount']:,} 원")
+        with col_c: st.metric("계약 기간", f"{sel_row['start_date']} ~ {sel_row['end_date']}")
+
+        st.markdown("---")
+
+        # ── 전자서명 버튼 ────────────────────────────────────
+        if st.button("📝 내용 확인 및 전자서명 진행", type="primary", use_container_width=True):
+            try:
+                # a. DB status를 '계약완료'로 UPDATE
+                _conn2 = get_conn()
+                _conn2.execute(
+                    "UPDATE contracts SET status='계약완료' WHERE id=?",
+                    (int(sel_row["id"]),)
+                )
+                _conn2.commit()
+
+                # b. PDF 생성 함수 호출
+                contract_dict = sel_row.to_dict()
+                pdf_path = generate_contract_pdf(contract_dict)
+
+                # c. 생성된 PDF 경로를 DB pdf_path 컬럼에 저장
+                _conn2.execute(
+                    "UPDATE contracts SET pdf_path=? WHERE id=?",
+                    (pdf_path, int(sel_row["id"]))
+                )
+                _conn2.commit()
+                _conn2.close()
+
+                # d. 성공 메시지 표시
+                st.success(f"✅ {selected_school} 전자서명이 완료되었습니다.")
+
+                # e. session_state(세션 상태)에 PDF 경로 저장
+                # → st.rerun() 없이도 다운로드 버튼이 유지되도록 처리
+                st.session_state["last_signed_pdf"]    = pdf_path
+                st.session_state["last_signed_school"] = selected_school
+
+            except Exception as e:
+                st.error(f"❌ 오류가 발생했습니다: {e}")
+
+        # ── 서명 완료 후 다운로드 버튼 (session_state 기반으로 유지) ──
+        if st.session_state.get("last_signed_pdf") and st.session_state.get("last_signed_school") == selected_school:
+            _last_pdf = st.session_state["last_signed_pdf"]
+            if os.path.exists(_last_pdf):                       # 파일이 실제로 존재하는지 확인
+                with open(_last_pdf, "rb") as f:
+                    _pdf_bytes = f.read()
+                _today_str = date.today().strftime("%Y%m%d")
+                st.download_button(
+                    label="📥 계약서 PDF 다운로드",
+                    data=_pdf_bytes,
+                    file_name=f"계약서_{selected_school}_{_today_str}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="sign_download"
+                )
+                # 다운로드 버튼 클릭 후 목록 갱신을 위한 새로고침 버튼 별도 제공
+                if st.button("🔄 목록 새로고침", use_container_width=True):
+                    st.session_state.pop("last_signed_pdf",    None)
+                    st.session_state.pop("last_signed_school", None)
+                    st.rerun()
+
+    # ── 계약완료 목록 표시 ──────────────────────────────────
+    st.markdown("---")
+    st.subheader("✅ 계약 완료 목록")
+    df_done = df_contracts[df_contracts["status"] == "계약완료"].copy()
+
+    if df_done.empty:
+        st.info("완료된 계약이 없습니다.")
+    else:
+        for _, done_row in df_done.iterrows():                  # iterrows: 행 단위로 반복
+            col_i, col_j, col_k, col_l = st.columns([3,2,2,2])
+            with col_i: st.write(f"🏫 {done_row['school_name']}")
+            with col_j: st.write(f"{done_row['total_amount']:,} 원")
+            with col_k: st.write(f"{done_row['start_date']} ~ {done_row['end_date']}")
+            with col_l:
+                # pdf_path가 존재하고 실제 파일도 있으면 재다운로드 버튼 표시
+                _pdf = done_row["pdf_path"]
+                if _pdf and os.path.exists(str(_pdf)):
+                    with open(_pdf, "rb") as f:
+                        st.download_button(
+                            label="📥 재다운로드",
+                            data=f.read(),
+                            file_name=os.path.basename(str(_pdf)),
+                            mime="application/pdf",
+                            key=f"redl_{done_row['id']}"        # key: 버튼 중복 방지용 고유값
+                        )
+                else:
+                    st.caption("파일 없음")
 
