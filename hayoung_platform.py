@@ -19,6 +19,7 @@ import io
 import os
 import random
 import calendar
+import zipfile
 from datetime import datetime, date
 
 try:
@@ -270,17 +271,39 @@ def init_db():
     # 학교별 단가 + 담당자
     c.execute("""
         CREATE TABLE IF NOT EXISTS school_prices (
-            학교명       TEXT PRIMARY KEY,
-            음식물단가   INTEGER DEFAULT 150,
-            재활용단가   INTEGER DEFAULT 300,
-            사업장단가   INTEGER DEFAULT 200,
-            담당자명     TEXT DEFAULT '',
-            담당자연락처 TEXT DEFAULT '',
-            담당자이메일 TEXT DEFAULT '',
-            교육청       TEXT DEFAULT '',
-            updated_at   TEXT
+            학교명           TEXT PRIMARY KEY,
+            음식물단가       INTEGER DEFAULT 150,
+            재활용단가       INTEGER DEFAULT 300,
+            사업장단가       INTEGER DEFAULT 200,
+            담당자명         TEXT DEFAULT '',
+            담당자연락처     TEXT DEFAULT '',
+            담당자이메일     TEXT DEFAULT '',
+            교육청           TEXT DEFAULT '',
+            -- [섹션A] 학교 마스터 확장 컬럼
+            학교_사업자번호  TEXT DEFAULT '',
+            학교_주소        TEXT DEFAULT '',
+            학교_전화        TEXT DEFAULT '',
+            계약_시작일      TEXT DEFAULT '',
+            계약_종료일      TEXT DEFAULT '',
+            계약_상태        TEXT DEFAULT '미계약',
+            비고             TEXT DEFAULT '',
+            updated_at       TEXT
         )
     """)
+    # [섹션A] 기존 DB에 컬럼 없으면 ALTER로 추가 (마이그레이션)
+    _sp_new_cols = {
+        "학교_사업자번호": "TEXT DEFAULT ''",
+        "학교_주소":       "TEXT DEFAULT ''",
+        "학교_전화":       "TEXT DEFAULT ''",
+        "계약_시작일":     "TEXT DEFAULT ''",
+        "계약_종료일":     "TEXT DEFAULT ''",
+        "계약_상태":       "TEXT DEFAULT '미계약'",
+        "비고":            "TEXT DEFAULT ''",
+    }
+    _existing = [row[1] for row in c.execute("PRAGMA table_info(school_prices)").fetchall()]
+    for col, coldef in _sp_new_cols.items():
+        if col not in _existing:
+            c.execute(f"ALTER TABLE school_prices ADD COLUMN {col} {coldef}")
     for school in SCHOOL_LIST:
         edu = next((k for k, v in EDU_OFFICES.items() if school in v), "")
         c.execute(
@@ -313,6 +336,81 @@ def init_db():
             완료여부 INTEGER DEFAULT 0
         )
     """)
+
+    # [섹션C] 서류 유효기간 관리 테이블
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS contract_docs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_name    TEXT NOT NULL,
+            issued_date TEXT DEFAULT '',
+            expire_date TEXT NOT NULL,
+            renew_url   TEXT DEFAULT '',
+            file_note   TEXT DEFAULT '',
+            renewed     INTEGER DEFAULT 0,
+            memo        TEXT DEFAULT '',
+            updated_at  TEXT
+        )
+    """)
+    # 기본 서류 7종 삽입 (최초 1회만)
+    _default_docs = [
+        ("소상공인 확인서",        "", "2026-03-31", "sminfo.mss.go.kr",         "중소벤처기업부 공식 발급"),
+        ("창업기업 확인서",        "", "2027-01-07", "중소벤처기업부",           "개업일 기준 7년 유효"),
+        ("재해율 확인서",          "", "2027-02-19", "안전보건공단 kosha.or.kr", "연 1회 갱신"),
+        ("사업자등록증",           "", "9999-12-31", "국세청 hometax.go.kr",     "변경 시 재발급"),
+        ("폐기물수집운반업 허가증","", "9999-12-31", "화성시청",                 "제20-35호 재교부 2023.09.26"),
+        ("사용인감계",             "", "9999-12-31", "자체 관리",                "계약별 첨부"),
+        ("사업자계좌 통장사본",    "", "9999-12-31", "기업은행",                 "450-092046-01-017"),
+    ]
+    for row in _default_docs:
+        c.execute(
+            """INSERT OR IGNORE INTO contract_docs
+               (doc_name, issued_date, expire_date, renew_url, file_note, updated_at)
+               VALUES (?,?,?,?,?,?)""",
+            (*row, datetime.now().strftime("%Y-%m-%d"))
+        )
+
+    # [섹션A] 계약 이력 마스터 테이블
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS contract_master (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            학교명          TEXT NOT NULL,
+            계약번호        TEXT DEFAULT '',
+            계약_시작일     TEXT NOT NULL,
+            계약_종료일     TEXT NOT NULL,
+            폐기물_종류     TEXT DEFAULT '음식물류폐기물',
+            단가            INTEGER DEFAULT 150,
+            월_예상량_L     REAL DEFAULT 0,
+            계약_상태       TEXT DEFAULT '계약중',
+            갱신_알림일     TEXT DEFAULT '',
+            나라장터_번호   TEXT DEFAULT '',
+            비고            TEXT DEFAULT '',
+            created_at      TEXT,
+            updated_at      TEXT
+        )
+    """)
+    # 서초고등학교 기본 계약 데이터 삽입 (최초 1회)
+    if c.execute("SELECT COUNT(*) FROM contract_master WHERE 학교명='서초고등학교'").fetchone()[0] == 0:
+        c.execute(
+            """INSERT INTO contract_master
+               (학교명, 계약번호, 계약_시작일, 계약_종료일,
+                폐기물_종류, 단가, 계약_상태, 나라장터_번호, 비고, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            ("서초고등학교", "", "2026-03-01", "2027-02-28",
+             "음식물류폐기물", 180, "계약중", "R26TA01543339 00",
+             "2026년 신규계약",
+             datetime.now().strftime("%Y-%m-%d"),
+             datetime.now().strftime("%Y-%m-%d"))
+        )
+    # 서초고등학교 school_prices 마스터 정보 업데이트
+    c.execute(
+        """UPDATE school_prices SET
+           학교_사업자번호=?, 학교_주소=?, 학교_전화=?,
+           계약_시작일=?, 계약_종료일=?, 계약_상태=?, updated_at=?
+           WHERE 학교명='서초고등학교'""",
+        ("210-83-00086", "서울특별시 서초구 반포대로27길 29", "02-580-3891",
+         "2026-03-01", "2027-02-28", "계약중",
+         datetime.now().strftime("%Y-%m-%d"))
+    )
 
     conn.commit()
 
@@ -370,63 +468,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
-# ============================================================
-# [나라장터 수의계약] g2b_contracts 테이블 초기화
-# ============================================================
-def init_g2b_db():
-    """나라장터 수의계약 테이블 생성 및 테스트 데이터 1건 삽입"""
-    conn = get_conn()                                           # 기존 DB 연결 함수 재사용
-    c    = conn.cursor()
-
-    # 테이블 생성 (이미 존재하면 건너뜀)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS g2b_contracts (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,      -- 자동 증가 고유번호
-            contract_no TEXT    UNIQUE NOT NULL,                -- 계약번호 (중복 불가)
-            school_name TEXT    NOT NULL,                       -- 계약 대상 학교명
-            amount      INTEGER NOT NULL DEFAULT 0,             -- 계약금액 (단위: 원)
-            status      TEXT    NOT NULL DEFAULT '초안송신'     -- 상태: 초안송신/승인완료/계약체결
-                        CHECK(status IN ('초안송신','승인완료','계약체결')),
-            pdf_path    TEXT    DEFAULT NULL,                   -- 생성된 PDF 경로
-            created_at  TEXT    NOT NULL                        -- 생성 일시
-        )
-    """)
-    conn.commit()
-
-    # 테이블이 비어있을 때만 테스트 데이터 삽입
-    if c.execute("SELECT COUNT(*) FROM g2b_contracts").fetchone()[0] == 0:
-        c.execute("""
-            INSERT INTO g2b_contracts (contract_no, school_name, amount, status, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            "R26TA01543339 00",                                 # 계약번호
-            "당곡고등학교",                                     # 대상 학교
-            3600000,                                            # 계약금액 (예시)
-            "초안송신",                                         # 초기 상태
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")       # 생성 일시
-        ))
-        conn.commit()
-
-    conn.close()
-
-
-def update_g2b_status(contract_no: str, new_status: str, pdf_path: str = None):
-    """계약 상태 및 PDF 경로 업데이트 함수"""
-    conn = get_conn()
-    if pdf_path:
-        conn.execute(
-            "UPDATE g2b_contracts SET status=?, pdf_path=? WHERE contract_no=?",
-            (new_status, pdf_path, contract_no)
-        )
-    else:
-        conn.execute(
-            "UPDATE g2b_contracts SET status=? WHERE contract_no=?",
-            (new_status, contract_no)
-        )
-    conn.commit()
-    conn.close()
-
 
 # ── 헬퍼 함수 ──────────────────────────────────────────────
 def get_setting(key):
@@ -597,170 +638,870 @@ def send_kakao_alimtalk(phone, school, food_kg, total_price):
 
 
 # ============================================================
-# [나라장터] 전자계약서 PDF 생성 함수
-# 필수 설치: pip install reportlab
+# [섹션 E] 계약서류 패키지 자동 생성 시스템
 # ============================================================
-def generate_g2b_pdf(row: dict, is_final: bool = False) -> str:
+
+# ── 하영자원 고정 정보 (전 서류 공통 사용) ─────────────────
+HY = {
+    "name":       "하영자원",
+    "ceo":        "정석완",
+    "biz_no":     "405-11-42991",
+    "permit_no":  "제20-35호",
+    "address":    "경기도 화성시 남양읍 남양성지로 219, 2층",
+    "tel":        "031-414-3713",
+    "mobile":     "010-3114-4030",
+    "fax":        "031-356-3713",
+    "email":      "hyrecycling@naver.com",
+    "bank":       "기업은행",
+    "account":    "450-092046-01-017",
+    "biz_type":   "폐기물처리",
+    "biz_item":   "지정외폐기물수집,운반업",
+    "processor":  "주식회사 청명",   # 처리업체
+}
+
+# 서류 유효기간 마스터 (D-day 알림용)
+DOC_EXPIRE = [
+    {"name": "소상공인 확인서",        "expire": "2026-03-31", "renew_url": "sminfo.mss.go.kr"},
+    {"name": "창업기업 확인서",         "expire": "2027-01-07", "renew_url": "중소벤처기업부"},
+    {"name": "재해율 확인서",           "expire": "2027-02-19", "renew_url": "안전보건공단"},
+    {"name": "사업자등록증",            "expire": "9999-12-31", "renew_url": "국세청"},
+    {"name": "폐기물수집운반업 허가증", "expire": "9999-12-31", "renew_url": "화성시청"},
+]
+
+
+# ── [섹션C] contract_docs DB 헬퍼 함수 ─────────────────────
+
+def c_get_all_docs() -> list[dict]:
+    """전체 서류 목록 + D-day 계산해서 반환"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, doc_name, issued_date, expire_date, renew_url, "
+        "file_note, renewed, memo FROM contract_docs ORDER BY expire_date ASC"
+    ).fetchall()
+    today_dt = date.today()
+    result = []
+    for r in rows:
+        exp_str = r[3]
+        if exp_str == "9999-12-31":
+            dday, status = "무기한", "🟢 정상"
+        else:
+            exp     = date.fromisoformat(exp_str)
+            diff    = (exp - today_dt).days
+            dday    = f"D-{diff}" if diff >= 0 else f"만료 +{abs(diff)}일"
+            if diff < 0:     status = "⛔ 만료됨"
+            elif diff <= 30: status = "🔴 만료임박"
+            elif diff <= 60: status = "🟡 주의"
+            else:            status = "🟢 정상"
+        result.append({
+            "id": r[0], "서류명": r[1], "발급일": r[2],
+            "만료일": exp_str if exp_str != "9999-12-31" else "무기한",
+            "갱신처": r[4], "비고": r[5],
+            "갱신완료": bool(r[6]), "메모": r[7],
+            "D-day": dday, "상태": status,
+        })
+    # 우선순위 정렬: 만료/임박 → 주의 → 정상
+    _sort_key = {"⛔ 만료됨": 0, "🔴 만료임박": 1, "🟡 주의": 2, "🟢 정상": 3}
+    result.sort(key=lambda x: _sort_key.get(x["상태"], 9))
+    return result
+
+
+def c_update_doc(doc_id: int, issued: str, expire: str,
+                 renew_url: str, file_note: str,
+                 renewed: bool, memo: str):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE contract_docs SET issued_date=?, expire_date=?,
+           renew_url=?, file_note=?, renewed=?, memo=?, updated_at=?
+           WHERE id=?""",
+        (issued, expire, renew_url, file_note, int(renewed), memo,
+         datetime.now().strftime("%Y-%m-%d"), doc_id)
+    )
+    conn.commit()
+
+
+def c_add_doc(doc_name: str, issued: str, expire: str,
+              renew_url: str, file_note: str, memo: str):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO contract_docs
+           (doc_name, issued_date, expire_date, renew_url, file_note, memo, updated_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (doc_name, issued, expire, renew_url, file_note, memo,
+         datetime.now().strftime("%Y-%m-%d"))
+    )
+    conn.commit()
+
+
+def c_delete_doc(doc_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM contract_docs WHERE id=?", (doc_id,))
+    conn.commit()
+
+
+def c_toggle_renewed(doc_id: int):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE contract_docs SET renewed = CASE WHEN renewed=1 THEN 0 ELSE 1 END "
+        "WHERE id=?", (doc_id,)
+    )
+    conn.commit()
+
+
+# ── [섹션A] 학교 마스터 + 계약 이력 헬퍼 함수 ──────────────
+
+def a_get_all_schools() -> list[dict]:
+    """school_prices 전체 + 계약 만료 D-day 계산"""
+    conn  = get_conn()
+    today = date.today()
+    rows  = conn.execute(
+        """SELECT 학교명, 음식물단가, 교육청,
+                  학교_사업자번호, 학교_주소, 학교_전화,
+                  계약_시작일, 계약_종료일, 계약_상태, 비고, updated_at
+           FROM school_prices ORDER BY 교육청, 학교명"""
+    ).fetchall()
+    result = []
+    for r in rows:
+        end = r[7] or ""
+        if end and end != "9999-12-31":
+            try:
+                diff = (date.fromisoformat(end) - today).days
+                if diff < 0:       contract_dday = f"⛔ 만료 +{abs(diff)}일"
+                elif diff <= 30:   contract_dday = f"🔴 D-{diff}"
+                elif diff <= 90:   contract_dday = f"🟡 D-{diff}"
+                else:              contract_dday = f"🟢 D-{diff}"
+            except Exception:
+                contract_dday = end
+        elif end == "9999-12-31":
+            contract_dday = "무기한"
+        else:
+            contract_dday = "미설정"
+        result.append({
+            "학교명":       r[0],
+            "음식물단가":   r[1],
+            "교육청":       r[2] or "",
+            "사업자번호":   r[3] or "",
+            "주소":         r[4] or "",
+            "전화":         r[5] or "",
+            "계약시작":     r[6] or "",
+            "계약종료":     r[7] or "",
+            "계약상태":     r[8] or "미계약",
+            "비고":         r[9] or "",
+            "수정일":       r[10] or "",
+            "계약D-day":   contract_dday,
+        })
+    return result
+
+
+def a_update_school(학교명: str, 단가: int, 사업자번호: str,
+                    주소: str, 전화: str, 시작일: str,
+                    종료일: str, 상태: str, 비고: str,
+                    담당자명: str, 담당자연락처: str, 담당자이메일: str):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE school_prices SET
+           음식물단가=?, 학교_사업자번호=?, 학교_주소=?, 학교_전화=?,
+           계약_시작일=?, 계약_종료일=?, 계약_상태=?,
+           비고=?, 담당자명=?, 담당자연락처=?, 담당자이메일=?, updated_at=?
+           WHERE 학교명=?""",
+        (단가, 사업자번호, 주소, 전화, 시작일, 종료일, 상태,
+         비고, 담당자명, 담당자연락처, 담당자이메일,
+         datetime.now().strftime("%Y-%m-%d"), 학교명)
+    )
+    conn.commit()
+
+
+def a_add_school(학교명: str, 교육청: str, 단가: int,
+                 사업자번호: str, 주소: str, 전화: str,
+                 시작일: str, 종료일: str, 상태: str, 비고: str):
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR IGNORE INTO school_prices
+           (학교명, 교육청, 음식물단가, 학교_사업자번호,
+            학교_주소, 학교_전화, 계약_시작일, 계약_종료일,
+            계약_상태, 비고, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (학교명, 교육청, 단가, 사업자번호, 주소, 전화,
+         시작일, 종료일, 상태, 비고,
+         datetime.now().strftime("%Y-%m-%d"))
+    )
+    conn.commit()
+
+
+def a_get_contracts(학교명: str = None) -> list[dict]:
+    """계약 이력 목록 반환"""
+    conn  = get_conn()
+    today = date.today()
+    query = "SELECT * FROM contract_master"
+    params: tuple = ()
+    if 학교명:
+        query  += " WHERE 학교명=?"
+        params  = (학교명,)
+    query += " ORDER BY 계약_시작일 DESC"
+    rows = conn.execute(query, params).fetchall()
+    cols = ["id","학교명","계약번호","계약_시작일","계약_종료일",
+            "폐기물_종류","단가","월_예상량_L","계약_상태",
+            "갱신_알림일","나라장터_번호","비고","created_at","updated_at"]
+    result = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        end = d.get("계약_종료일","")
+        if end:
+            try:
+                diff = (date.fromisoformat(end) - today).days
+                d["D-day"] = (f"D-{diff}" if diff >= 0 else f"만료 +{abs(diff)}일")
+            except Exception:
+                d["D-day"] = ""
+        result.append(d)
+    return result
+
+
+def a_add_contract(학교명: str, 계약번호: str, 시작일: str,
+                   종료일: str, 폐기물종류: str, 단가: int,
+                   월예상량: float, 상태: str,
+                   나라장터번호: str, 비고: str):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO contract_master
+           (학교명, 계약번호, 계약_시작일, 계약_종료일,
+            폐기물_종류, 단가, 월_예상량_L, 계약_상태,
+            나라장터_번호, 비고, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (학교명, 계약번호, 시작일, 종료일, 폐기물종류,
+         단가, 월예상량, 상태, 나라장터번호, 비고,
+         datetime.now().strftime("%Y-%m-%d"),
+         datetime.now().strftime("%Y-%m-%d"))
+    )
+    # school_prices 계약 정보도 동기화
+    conn.execute(
+        """UPDATE school_prices SET
+           계약_시작일=?, 계약_종료일=?, 계약_상태=?, updated_at=?
+           WHERE 학교명=?""",
+        (시작일, 종료일, 상태, datetime.now().strftime("%Y-%m-%d"), 학교명)
+    )
+    conn.commit()
+
+
+def a_delete_contract(contract_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM contract_master WHERE id=?", (contract_id,))
+    conn.commit()
+
+
+def _hy_font() -> str:
+    """한글 폰트 등록 후 폰트명 반환"""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    for fid, fpath in [
+        ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf"),
+        ("MalgunGothic", "/usr/share/fonts/truetype/malgun.ttf"),
+        ("NanumGothic",  "C:/Windows/Fonts/NanumGothic.ttf"),
+        ("NanumGothic",  "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+    ]:
+        if os.path.exists(fpath):
+            try:
+                pdfmetrics.registerFont(TTFont(fid, fpath))
+                return fid
+            except Exception:
+                pass
+    return "Helvetica"
+
+
+def _out_dir(sub: str) -> str:
+    """출력 폴더 생성 후 경로 반환"""
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        base = os.getcwd()
+    path = os.path.join(base, sub)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# ── E-1: 음식물 견적서 PDF 생성 ────────────────────────────
+def generate_estimate_pdf(school_name: str, school_biz_no: str,
+                          volume_l: float, unit_price: int,
+                          contract_period: str,
+                          year: str = None) -> str:
     """
-    나라장터 스타일 전자계약서 PDF 생성
-    row      : g2b_contracts 테이블 1건 딕셔너리(dict)
-    is_final : False=초안(草案), True=도장 날인 최종본
-    반환값   : 저장된 PDF 파일 경로(str)
+    음식물 견적서 PDF 생성
+    반환: 저장된 PDF 경로
     """
-    # ── reportlab(리포트랩) 모듈 임포트 ─────────────────────
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units    import mm
     from reportlab.lib          import colors
-    from reportlab.platypus     import (SimpleDocTemplate, Table, TableStyle,
-                                        Paragraph, Spacer, Image, HRFlowable)
+    from reportlab.platypus     import (SimpleDocTemplate, Table,
+                                        TableStyle, Paragraph,
+                                        Spacer, HRFlowable)
     from reportlab.lib.styles   import ParagraphStyle
-    from reportlab.pdfbase      import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
 
-    # ── 한글 폰트 등록 ───────────────────────────────────────
-    FONT = "Helvetica"                                          # 기본값 (한글 깨짐 가능)
-    for fid, fpath in [
-        ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf"),       # 맑은 고딕
-        ("NanumGothic",  "C:/Windows/Fonts/NanumGothic.ttf"),  # 나눔고딕
-    ]:
-        if os.path.exists(fpath):
-            pdfmetrics.registerFont(TTFont(fid, fpath))
-            FONT = fid
-            break
+    FONT = _hy_font()
+    today = date.today()
+    yr    = year or str(today.year)[2:]          # "26"
+    supply_amount = int(volume_l * unit_price) if volume_l else unit_price
 
-    # ── 저장 폴더 생성 ───────────────────────────────────────
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        base_dir = os.getcwd()
-    out_dir = os.path.join(base_dir, "g2b_contracts_pdf")
-    os.makedirs(out_dir, exist_ok=True)
+    out   = _out_dir("estimates_pdf")
+    fname = f"음식물견적서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
+    fpath = os.path.join(out, fname)
 
-    # ── 파일명 결정 ──────────────────────────────────────────
-    suffix    = "_최종" if is_final else "_초안"
-    safe_no   = row["contract_no"].replace(" ", "_")            # 공백을 언더스코어로 치환
-    file_name = f"수의계약서_{safe_no}{suffix}_{date.today().strftime('%Y%m%d')}.pdf"
-    file_path = os.path.join(out_dir, file_name)
-
-    # ── 스타일 정의 ──────────────────────────────────────────
     def ps(name, size, align=0, bold=False, color=colors.black):
+        w = f"<b>" if bold else ""
         return ParagraphStyle(name, fontName=FONT, fontSize=size,
-                              alignment=align, leading=size*1.6,
-                              textColor=color,
-                              spaceAfter=3)
+                               alignment=align, leading=size*1.55,
+                               textColor=color, spaceAfter=2)
 
-    # ── PDF 빌드 ─────────────────────────────────────────────
-    doc   = SimpleDocTemplate(file_path, pagesize=A4,
-                               leftMargin=20*mm, rightMargin=20*mm,
-                               topMargin=22*mm, bottomMargin=20*mm)
+    doc   = SimpleDocTemplate(fpath, pagesize=A4,
+                               leftMargin=18*mm, rightMargin=18*mm,
+                               topMargin=20*mm, bottomMargin=18*mm)
     story = []
 
-    # 상단 기관 로고 텍스트
+    # 제목
     story.append(Paragraph(
-        "<b>나라장터 (G2B) 전자조달시스템</b>",
-        ps("hdr", 10, align=1, color=colors.HexColor("#1a73e8"))
+        "<b>음식폐기물 처리비용 견적서</b>",
+        ps("t", 18, align=1)
     ))
-    story.append(Spacer(1, 3*mm))
-    story.append(HRFlowable(width="100%", thickness=2,
-                             color=colors.HexColor("#1a73e8")))
+    story.append(Spacer(1, 5*mm))
+
+    # 상단 2단 정보 테이블 (고객 | 공급자)
+    left_data = [
+        [Paragraph("<b>고객명</b>", ps("h",10)), Paragraph(f"<b>{school_name}</b>", ps("v",12))],
+        [Paragraph("<b>견적일</b>", ps("h",10)), Paragraph(f"{yr}.{today.month:02d}.{today.day:02d}", ps("v",10))],
+    ]
+    right_data = [
+        ["사업자등록번호", HY["biz_no"],  "허가번호", HY["permit_no"]],
+        ["상호",          HY["name"],     "대표자",   HY["ceo"]],
+        ["주소",          HY["address"],  "",         ""],
+        ["업태",          HY["biz_type"], "업종",     HY["biz_item"]],
+    ]
+
+    # 공급자 박스 표
+    sup_tbl = Table(right_data, colWidths=[22*mm, 52*mm, 18*mm, 40*mm])
+    sup_tbl.setStyle(TableStyle([
+        ("FONTNAME",  (0,0), (-1,-1), FONT),
+        ("FONTSIZE",  (0,0), (-1,-1), 8),
+        ("BACKGROUND",(0,0), (0,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND",(2,0), (2,-1), colors.HexColor("#f0f0f0")),
+        ("GRID",      (0,0), (-1,-1), 0.3, colors.grey),
+        ("VALIGN",    (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN",     (0,0), (0,-1), "CENTER"),
+        ("ALIGN",     (2,0), (2,-1), "CENTER"),
+        ("SPAN",      (1,2), (3,2)),   # 주소 병합
+        ("ROWHEIGHT", (0,0), (-1,-1), 7*mm),
+    ]))
+
+    hdr_tbl = Table(
+        [[Paragraph(f"<b>고객명</b>", ps("h",10)), Paragraph(f"<b>{school_name}</b>", ps("hv",12,bold=True)),
+          Paragraph("<b>공급자</b>", ps("h",10)), sup_tbl]],
+        colWidths=[18*mm, 42*mm, 18*mm, None]
+    )
+    hdr_tbl.setStyle(TableStyle([
+        ("FONTNAME",  (0,0), (-1,-1), FONT),
+        ("BOX",       (0,0), (1,-1), 0.5, colors.grey),
+        ("BOX",       (2,0), (3,-1), 0.5, colors.grey),
+        ("ALIGN",     (0,0), (0,-1), "CENTER"),
+        ("ALIGN",     (2,0), (2,-1), "CENTER"),
+        ("VALIGN",    (0,0), (-1,-1), "MIDDLE"),
+        ("BACKGROUND",(0,0), (0,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND",(2,0), (2,-1), colors.HexColor("#f0f0f0")),
+        ("ROWHEIGHT", (0,0), (-1,-1), 10*mm),
+    ]))
+    story.append(hdr_tbl)
     story.append(Spacer(1, 4*mm))
 
-    # 제목
-    draft_label = "" if is_final else "  [초 안]"
+    # 계약기간 행
     story.append(Paragraph(
-        f"<b>수의계약 전자계약서{draft_label}</b>",
-        ps("title", 20, align=1)
+        f"<b>{yr}년도 음식물류폐기물견적서</b>　　　계약기간: {contract_period}",
+        ps("cp", 10)
     ))
-    story.append(Spacer(1, 6*mm))
+    story.append(Spacer(1, 2*mm))
 
-    # 계약 정보 표
-    amount_str = f"{row['amount']:,} 원"
-    tbl_data = [
-        ["항  목",   "내  용"],
-        ["계약번호", row["contract_no"]],
-        ["계약기관", row["school_name"]],
-        ["수급인",   "하영자원 (대표자: 하영자원 대표)"],
-        ["계약금액", amount_str],
-        ["계약종류", "폐기물 수거 및 처리 용역 수의계약"],
-        ["계약일자", date.today().strftime("%Y년 %m월 %d일")],
-        ["계약상태", row["status"]],
+    # 공급가액 합계 행
+    total_str = f"{supply_amount:,}" if volume_l else "-"
+    story.append(Table(
+        [["공급가액 합계", total_str]],
+        colWidths=[40*mm, None]
+    ))
+    story.append(Spacer(1, 2*mm))
+
+    # 품목 명세 테이블
+    item_header = ["품  명", "규격", "수량", "단가(원)", "공급가액", "비고"]
+    item_rows   = [
+        ["음식폐기물수거운반처리", "L(리터)",
+         f"{volume_l:,.0f}" if volume_l else "",
+         f"{unit_price:,}", f"{supply_amount:,}", "면세"],
     ]
-    tbl = Table(tbl_data, colWidths=[40*mm, 120*mm])
-    tbl.setStyle(TableStyle([
+    # 빈 행 6개 (추가 품목용)
+    for _ in range(6):
+        item_rows.append(["", "", "", "", "", ""])
+    item_rows.append(["합  계", "", "", "", f"{supply_amount:,}", ""])
+
+    item_tbl = Table(
+        [item_header] + item_rows,
+        colWidths=[55*mm, 22*mm, 22*mm, 25*mm, 28*mm, 18*mm]
+    )
+    item_tbl.setStyle(TableStyle([
         ("FONTNAME",       (0,0), (-1,-1), FONT),
-        ("FONTSIZE",       (0,0), (-1,-1), 11),
+        ("FONTSIZE",       (0,0), (-1,-1), 9),
         ("BACKGROUND",     (0,0), (-1, 0), colors.HexColor("#1a73e8")),
         ("TEXTCOLOR",      (0,0), (-1, 0), colors.white),
-        ("FONTSIZE",       (0,0), (-1, 0), 12),
         ("ALIGN",          (0,0), (-1,-1), "CENTER"),
         ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1),
-         [colors.white, colors.HexColor("#f0f7ff")]),
-        ("GRID",           (0,0), (-1,-1), 0.5, colors.grey),
-        ("ROWHEIGHT",      (0,0), (-1,-1), 9*mm),
+        ("GRID",           (0,0), (-1,-1), 0.3, colors.grey),
+        ("ROWBACKGROUNDS", (0,1), (-1,-2),
+         [colors.white, colors.HexColor("#f8f8f8")]),
+        ("BACKGROUND",     (0,-1), (-1,-1), colors.HexColor("#e8e8e8")),
+        ("FONTSIZE",       (0,-1), (-1,-1), 10),
+        ("ROWHEIGHT",      (0,0), (-1,-1), 8*mm),
     ]))
-    story.append(tbl)
+    story.append(item_tbl)
+    story.append(Spacer(1, 4*mm))
+
+    # 특기사항
+    notes = [
+        "1. 음식물쓰레기수거용기는 수집운반업체(하영자원)에서 부담한다.",
+        "2. 음식물쓰레기수거 때에 배출자는 수집운반업체가 수거를 원활히 할 수 있게 해야한다.",
+        "3. 천재지변(눈,비)으로 인하여 수거를 할 수 없을 경우 수집운반업체는 배출자에게 "
+           "지체없이 통보하고 수거 가능일자를 협의할 수 있다.",
+    ]
+    note_tbl = Table(
+        [["특기사항", "\n".join(notes)]],
+        colWidths=[18*mm, None]
+    )
+    note_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 8),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("VALIGN",     (0,0), (-1,-1), "TOP"),
+        ("ALIGN",      (0,0), (0,-1), "CENTER"),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 18*mm),
+    ]))
+    story.append(note_tbl)
+    story.append(Spacer(1, 3*mm))
+
+    # 연락처 행
+    contact_tbl = Table(
+        [["연락처", HY["tel"], "FAX", HY["fax"], "이메일", HY["email"], "담당자", HY["ceo"]]],
+        colWidths=[15*mm, 28*mm, 10*mm, 28*mm, 15*mm, 48*mm, 15*mm, 15*mm]
+    )
+    contact_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 8),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (4,0), (4,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (6,0), (6,-1), colors.HexColor("#f0f0f0")),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 7*mm),
+    ]))
+    story.append(contact_tbl)
+
+    doc.build(story)
+    return fpath
+
+
+# ── E-2a: 음식물류폐기물 위수탁계약서 PDF ──────────────────
+def generate_contract_doc_pdf(school_name: str, school_biz_no: str,
+                               school_addr: str, school_tel: str,
+                               start_date: str, end_date: str,
+                               waste_type: str = "음식물류폐기물",
+                               volume_str: str = "",
+                               unit_price: int = 180,
+                               contract_amount: str = "") -> str:
+    """
+    폐기물 위수탁 운반 처리 계약서 PDF 생성
+    hwp 원본(음식물류폐기물_위수탁계약서1.hwp) 레이아웃 기준
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units    import mm
+    from reportlab.lib          import colors
+    from reportlab.platypus     import (SimpleDocTemplate, Table,
+                                        TableStyle, Paragraph, Spacer)
+    from reportlab.lib.styles   import ParagraphStyle
+
+    FONT  = _hy_font()
+    today = date.today()
+    out   = _out_dir("contract_pdf")
+    fname = f"위수탁계약서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
+    fpath = os.path.join(out, fname)
+
+    def ps(n, sz, align=0, bold=False):
+        return ParagraphStyle(n, fontName=FONT, fontSize=sz,
+                               alignment=align, leading=sz*1.6,
+                               spaceAfter=2)
+
+    doc   = SimpleDocTemplate(fpath, pagesize=A4,
+                               leftMargin=25*mm, rightMargin=25*mm,
+                               topMargin=25*mm, bottomMargin=20*mm)
+    story = []
+
+    # 제목
+    story.append(Paragraph(
+        "<b>폐기물 위수탁 운반 처리 계약서(안)</b>",
+        ps("t", 16, align=1)
+    ))
     story.append(Spacer(1, 8*mm))
 
-    # 계약 조항
-    for txt in [
-        "제1조 (목적) 발주기관과 수급인은 상호 신뢰를 바탕으로 본 수의계약을 성실히 이행한다.",
-        "제2조 (계약금액) 계약금액은 위 표에 기재된 금액으로 하며 부가가치세를 포함한다.",
-        "제3조 (이행기간) 계약 체결일로부터 1년간으로 하며, 협의에 의해 연장할 수 있다.",
-        "제4조 (전자계약) 본 계약은 전자서명법에 의한 전자계약으로 종이 계약과 동일한 효력을 가진다.",
-    ]:
-        story.append(Paragraph(txt, ps("body", 10)))
-    story.append(Spacer(1, 10*mm))
+    # 계약 기본 정보 목록
+    yr    = str(today.year)[2:]
+    items = [
+        ("1. 계  약  명", f"음식물류폐기물수집,운반 처리"),
+        ("2. 배  출  장  소", school_name),
+        ("3. 처  리  장  소", HY["processor"]),
+        ("4. 결  제  조  건", "계좌이체"),
+        ("5. 위수탁 계약기간",
+         f"{start_date}부터  {end_date}까지"),
+        ("6. 위수탁 폐기물 및 처리금액", "(단위: 원)"),
+    ]
+    for label, value in items:
+        row_tbl = Table(
+            [[Paragraph(f"<b>{label}</b>", ps("lbl",10)),
+              Paragraph(f": {value}", ps("val",10))]],
+            colWidths=[52*mm, None]
+        )
+        row_tbl.setStyle(TableStyle([
+            ("FONTNAME", (0,0), (-1,-1), FONT),
+            ("VALIGN",   (0,0), (-1,-1), "MIDDLE"),
+        ]))
+        story.append(row_tbl)
+        story.append(Spacer(1, 1*mm))
 
-    # 서명 날짜
+    story.append(Spacer(1, 3*mm))
+
+    # 폐기물/단가/계약금액 표
+    waste_header = ["폐기물 종류", "물량(예상)", "단가", "계약금액", "처리방법"]
+    waste_row    = [waste_type, volume_str, f"{unit_price}원/L",
+                   contract_amount, "위탁처리"]
+    waste_total  = ["총  계", "", "", contract_amount, ""]
+
+    waste_tbl = Table(
+        [waste_header, waste_row, waste_total],
+        colWidths=[40*mm, 30*mm, 28*mm, 40*mm, 28*mm]
+    )
+    waste_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 9),
+        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#dddddd")),
+        ("BACKGROUND", (0,-1),(- 1,-1),colors.HexColor("#eeeeee")),
+        ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("GRID",       (0,0), (-1,-1), 0.5, colors.black),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 9*mm),
+    ]))
+    story.append(waste_tbl)
+    story.append(Spacer(1, 8*mm))
+
+    # 계약 체결 문구
     story.append(Paragraph(
-        f"계약체결일: {date.today().strftime('%Y년 %m월 %d일')}",
-        ps("date", 11, align=2)
+        "위 계약은 상호 대등한 입장에서 신의성실의 원칙에 따라 계약을 체결하고 "
+        "본 계약상의 내용을 이행 증명하기 위하여 배출자와 수집운반업자가 "
+        "기명날인한 후 각 1부씩 보관하기로 한다.",
+        ps("body", 10)
     ))
-    story.append(Spacer(1, 6*mm))
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph(
+        f"{yr}년　　{today.month}월　　{today.day}일",
+        ps("dt", 11, align=2)
+    ))
+    story.append(Spacer(1, 8*mm))
 
-    # 서명란 + 도장
-    stamp_path = os.path.join(base_dir, "stamp.png")
-    left_cell  = Paragraph(
-        f"발주기관: {row['school_name']} (인)", ps("sign", 12, align=1)
-    )
-    if is_final and os.path.exists(stamp_path):                 # 최종본 + 도장 파일 존재 시
-        right_cell = Image(stamp_path, width=20*mm, height=20*mm)
-    elif is_final:
-        right_cell = Paragraph("[직인]", ps("sign", 12, align=1))
-    else:                                                       # 초안은 도장 없음
-        right_cell = Paragraph("수급인: 하영자원 대표자", ps("sign", 12, align=1))
-
-    sign_tbl = Table(
-        [[left_cell, right_cell], ["", ""]],
-        colWidths=[80*mm, 80*mm]
-    )
+    # 배출자(갑) / 운반자(을) 서명란
+    sign_data = [
+        ["구분", "배출자 (갑)", "운반자 (을)"],
+        ["상  호", school_name, HY["name"]],
+        ["소재지", school_addr, HY["address"]],
+        ["사업자번호", school_biz_no, HY["biz_no"]],
+        ["전화번호", school_tel, HY["mobile"]],
+        ["허가번호", "", HY["permit_no"]],
+        ["서명(인)", "학교장 (인)", f"{HY['ceo']} (인)"],
+    ]
+    sign_tbl = Table(sign_data, colWidths=[30*mm, 72*mm, 62*mm])
     sign_tbl.setStyle(TableStyle([
-        ("FONTNAME",  (0,0), (-1,-1), FONT),
-        ("ALIGN",     (0,0), (-1,-1), "CENTER"),
-        ("VALIGN",    (0,0), (-1,-1), "MIDDLE"),
-        ("BOX",       (0,0), (0,-1), 0.5, colors.grey),
-        ("BOX",       (1,0), (1,-1), 0.5, colors.grey),
-        ("ROWHEIGHT", (0,0), (-1,-1), 13*mm),
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 10),
+        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#1a73e8")),
+        ("TEXTCOLOR",  (0,0), (-1, 0), colors.white),
+        ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#f0f0f0")),
+        ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("GRID",       (0,0), (-1,-1), 0.5, colors.grey),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 9*mm),
+        ("ROWHEIGHT",  (0,-1),(- 1,-1),14*mm),
     ]))
     story.append(sign_tbl)
 
-    # 초안 워터마크(watermark) 텍스트
-    if not is_final:
-        story.append(Spacer(1, 8*mm))
-        story.append(Paragraph(
-            "※ 본 문서는 검토용 초안이며 법적 효력이 없습니다.",
-            ps("warn", 9, align=1, color=colors.red)
-        ))
+    doc.build(story)
+    return fpath
+
+
+# ── E-2b: 계약이행 통합 서약서 PDF ─────────────────────────
+def generate_pledge_pdf(school_name: str, unit_price: int,
+                        start_date: str, end_date: str) -> str:
+    """
+    계약이행 통합 서약서 PDF 생성
+    (hwp 원본: 계약이행_통합_서약서.hwp 기준)
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units    import mm
+    from reportlab.lib          import colors
+    from reportlab.platypus     import (SimpleDocTemplate, Table,
+                                        TableStyle, Paragraph, Spacer)
+    from reportlab.lib.styles   import ParagraphStyle
+
+    FONT  = _hy_font()
+    today = date.today()
+    yr    = str(today.year)[2:]
+    out   = _out_dir("contract_pdf")
+    fname = f"계약이행서약서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
+    fpath = os.path.join(out, fname)
+
+    def ps(n, sz, align=0):
+        return ParagraphStyle(n, fontName=FONT, fontSize=sz,
+                               alignment=align, leading=sz*1.6,
+                               spaceAfter=2)
+
+    doc   = SimpleDocTemplate(fpath, pagesize=A4,
+                               leftMargin=20*mm, rightMargin=20*mm,
+                               topMargin=22*mm, bottomMargin=18*mm)
+    story = []
+
+    # 제목
+    story.append(Paragraph("<b>계약이행 통합 서약서</b>", ps("t",16,align=1)))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph(
+        f"{yr}년 음식물폐기물처리용역",
+        ps("sub", 11, align=1)
+    ))
+    story.append(Spacer(1, 5*mm))
+
+    # 기본 정보 표
+    info_tbl = Table([
+        ["발주기관", school_name,    "단 가",    f"{unit_price}원/L"],
+        ["계약기간", f"{start_date} ~ {end_date}", "", ""],
+        ["업체명",   HY["name"],      "사업자번호", HY["biz_no"]],
+        ["대표자",   HY["ceo"],       "연락처",     HY["tel"]],
+        ["주  소",   HY["address"],   "",           ""],
+    ], colWidths=[25*mm, 68*mm, 28*mm, 45*mm])
+    info_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 9),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#e8e8e8")),
+        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#e8e8e8")),
+        ("GRID",       (0,0), (-1,-1), 0.3, colors.grey),
+        ("ALIGN",      (0,0), (0,-1), "CENTER"),
+        ("ALIGN",      (2,0), (2,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("SPAN",       (1,1), (3,1)),   # 계약기간 병합
+        ("SPAN",       (1,4), (3,4)),   # 주소 병합
+        ("ROWHEIGHT",  (0,0), (-1,-1), 8*mm),
+    ]))
+    story.append(info_tbl)
+    story.append(Spacer(1, 5*mm))
+
+    # 이행 내용 체크 표
+    checks = [
+        ("계약일반조건",
+         "지방자치단체 입찰 및 계약 집행기준 제9장 계약 일반조건을 준수합니다.",
+         "[✓] 예  [ ] 아니오"),
+        ("수의계약 각서",
+         "귀 기관과 수의계약을 체결함에 있어서 수의계약 배제사유 중 어느 사유에도 "
+         "해당되지 않으며, 차후 이러한 사실이 발견된 경우 계약의 해제·해지 및 "
+         "부정당업자 제재 처분을 받아도 하등의 이유를 제기하지 않겠습니다.",
+         "[✓] 예  [ ] 아니오  [ ] 해당없음"),
+        ("수의계약 체결 제한 여부",
+         "발주기관의 소속 고위공직자 등 이해충돌 방지법 해당 여부 확인.\n"
+         "본인은 해당 없음을 확인합니다.",
+         "[ ] 예  [ ] 아니오  [✓] 해당없음"),
+        ("청렴계약 이행서약",
+         "본 계약과 관련하여 직·간접적으로 뇌물수수, 입찰 및 계약 방해 등 "
+         "부정행위를 하지 않겠으며, 위반 시 계약해지 등 제재를 감수합니다.",
+         "[✓] 예  [ ] 아니오"),
+        ("중대재해 예방점검",
+         "「중대재해 처벌 등에 관한 법률」에 따라 안전보건 관리체계를 구축하고 "
+         "재해 예방에 최선을 다하겠습니다.",
+         "[✓] 예  [ ] 아니오"),
+    ]
+
+    chk_header = [
+        Paragraph("<b>이행 내용</b>", ps("h",9,align=1)),
+        Paragraph("<b>세부내용</b>",  ps("h",9,align=1)),
+        Paragraph("<b>확인</b>",      ps("h",9,align=1)),
+    ]
+    chk_rows = [[
+        Paragraph(c[0], ps(f"cl{i}", 9, align=1)),
+        Paragraph(c[1], ps(f"cv{i}", 8)),
+        Paragraph(c[2], ps(f"cc{i}", 8, align=1)),
+    ] for i, c in enumerate(checks)]
+
+    chk_tbl = Table(
+        [chk_header] + chk_rows,
+        colWidths=[35*mm, 100*mm, 31*mm]
+    )
+    chk_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#1a73e8")),
+        ("TEXTCOLOR",  (0,0), (-1, 0), colors.white),
+        ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#f0f4ff")),
+        ("ALIGN",      (0,0), (-1, 0), "CENTER"),
+        ("ALIGN",      (0,1), (0,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("GRID",       (0,0), (-1,-1), 0.4, colors.grey),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 16*mm),
+    ]))
+    story.append(chk_tbl)
+    story.append(Spacer(1, 8*mm))
+
+    # 서명란
+    story.append(Paragraph(
+        f"위와 같이 서약합니다.　　　　　{today.strftime('%Y년 %m월 %d일')}",
+        ps("sd", 10, align=2)
+    ))
+    story.append(Spacer(1, 5*mm))
+
+    sign_tbl2 = Table([
+        ["업체명", HY["name"],   "사업자번호", HY["biz_no"]],
+        ["대표자", HY["ceo"] + "　　　　　　(인)", "", ""],
+    ], colWidths=[20*mm, 70*mm, 28*mm, 48*mm])
+    sign_tbl2.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 10),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#eeeeee")),
+        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#eeeeee")),
+        ("GRID",       (0,0), (-1,-1), 0.4, colors.grey),
+        ("ALIGN",      (0,0), (0,-1), "CENTER"),
+        ("ALIGN",      (2,0), (2,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("SPAN",       (1,1), (3,1)),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 12*mm),
+    ]))
+    story.append(sign_tbl2)
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph(
+        f"서초고등학교장 귀중",
+        ps("rcp", 10, align=2)
+    ))
 
     doc.build(story)
-    return file_path
+    return fpath
+
+
+# ── E-3: 계약서류 패키지 ZIP 생성 ──────────────────────────
+def generate_contract_package(
+    school_name: str,
+    school_biz_no: str   = "",
+    school_addr: str     = "",
+    school_tel: str      = "",
+    start_date: str      = "",
+    end_date: str        = "",
+    volume_l: float      = 0,
+    unit_price: int      = 180,
+    contract_amount: str = "",
+) -> bytes:
+    """
+    학교명 입력 → PDF 3종 자동생성 + 기존 서류 포함 → ZIP 반환 (bytes)
+    포함 서류:
+      자동생성: 음식물견적서, 위수탁계약서, 계약이행서약서
+      기존파일: 사업자등록증, 허가증, 소상공인, 창업기업, 재해율확인서, 계좌
+    """
+    contract_period = (f"{start_date} ~ {end_date}"
+                       if start_date and end_date else "계약기간 기재")
+
+    generated = {}
+    errors    = {}
+
+    # ① PDF 3종 생성
+    try:
+        generated["견적서"] = generate_estimate_pdf(
+            school_name, school_biz_no,
+            volume_l, unit_price, contract_period
+        )
+    except Exception as e:
+        errors["견적서"] = str(e)
+
+    try:
+        generated["위수탁계약서"] = generate_contract_doc_pdf(
+            school_name, school_biz_no, school_addr, school_tel,
+            start_date, end_date,
+            volume_l=f"{volume_l:,.0f}L" if volume_l else "",
+            unit_price=unit_price,
+            contract_amount=contract_amount,
+        )
+    except Exception as e:
+        errors["위수탁계약서"] = str(e)
+
+    try:
+        generated["계약이행서약서"] = generate_pledge_pdf(
+            school_name, unit_price, start_date, end_date
+        )
+    except Exception as e:
+        errors["계약이행서약서"] = str(e)
+
+    # ② 기존 서류 파일 경로 목록
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        base = os.getcwd()
+
+    static_docs = {
+        "사업자등록증.jpg":    os.path.join(base, "사업자등록증.jpg"),
+        "허가증.jpg":          os.path.join(base, "허가증.jpg"),
+        "소상공인확인서.pdf":  os.path.join(base, "소상공인.pdf"),
+        "창업기업확인서.pdf":  os.path.join(base, "창업기업.pdf"),
+        "재해율확인서.pdf":    os.path.join(base, "재해율확인서.pdf"),
+        "사업자계좌.jpg":      os.path.join(base, "사업자계좌.jpg"),
+    }
+
+    # ③ ZIP 메모리 내 생성
+    buf = io.BytesIO()
+    today_str = date.today().strftime("%Y%m%d")
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 자동 생성 PDF
+        for name, path in generated.items():
+            if os.path.exists(path):
+                zf.write(path, f"01_자동생성/{os.path.basename(path)}")
+        # 기존 서류
+        for arc_name, fpath in static_docs.items():
+            if os.path.exists(fpath):
+                zf.write(fpath, f"02_기존서류/{arc_name}")
+        # 오류 목록 있으면 txt로 포함
+        if errors:
+            err_txt = "\n".join(f"{k}: {v}" for k, v in errors.items())
+            zf.writestr("오류목록.txt", err_txt)
+        # 체크리스트
+        checklist = f"""하영자원 계약서류 패키지 체크리스트
+생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+대상학교: {school_name}
+계약기간: {contract_period}
+단  가: {unit_price}원/L
+==============================================
+[자동생성 서류]
+{'✅' if '견적서' in generated else '❌'} 음식물 견적서 PDF
+{'✅' if '위수탁계약서' in generated else '❌'} 위수탁계약서 PDF
+{'✅' if '계약이행서약서' in generated else '❌'} 계약이행 통합 서약서 PDF
+
+[기존 서류]
+{'✅' if os.path.exists(static_docs['사업자등록증.jpg']) else '⚠️ 없음'} 사업자등록증
+{'✅' if os.path.exists(static_docs['허가증.jpg']) else '⚠️ 없음'} 폐기물수집운반업 허가증
+{'✅' if os.path.exists(static_docs['소상공인확인서.pdf']) else '⚠️ 없음'} 소상공인 확인서 (만료: 2026-03-31 ⚠️)
+{'✅' if os.path.exists(static_docs['창업기업확인서.pdf']) else '⚠️ 없음'} 창업기업 확인서
+{'✅' if os.path.exists(static_docs['재해율확인서.pdf']) else '⚠️ 없음'} 재해율 확인서
+{'✅' if os.path.exists(static_docs['사업자계좌.jpg']) else '⚠️ 없음'} 사업자 계좌 통장사본
+==============================================
+⚠️ 주의: 소상공인 확인서는 2026-03-31 만료 예정입니다.
+   갱신 주소: sminfo.mss.go.kr
+"""
+        zf.writestr("00_서류체크리스트.txt", checklist)
+
+    return buf.getvalue(), errors
+
 
 # ============================================================
 # DB 초기화 + 데이터 로드
 # ============================================================
 init_db()
-init_g2b_db()        # [나라장터] g2b_contracts 테이블 초기화
 df_all = load_data()
 
 # ============================================================
@@ -895,22 +1636,23 @@ with st.sidebar:
 
 # ── 로그인 정보 기반 role 매핑 ──
 _role_map = {
+    "관리자":   "🏢 관리자 (본사 관제)",
+    "학교":     "🏫 학교 담당자 (행정실)",
     "수거기사": "🚚 수거 기사 (현장 앱)",
     "교육청":   "🏛️ 교육청 관제 (신규)",
 }
-# 관리자·학교는 사이드바 radio(라디오) 버튼으로 탭 선택
+
+# 관리자는 사이드바 radio로 추가 탭 선택
 if st.session_state.user_role == "관리자":
-    role = st.sidebar.radio(
-        "메뉴",
-        ["🏢 관리자 (본사 관제)", "🏛️ 나라장터 계약관리"],
-        label_visibility="collapsed"
-    )
-elif st.session_state.user_role == "학교":
-    role = st.sidebar.radio(
-        "메뉴",
-        ["🏫 학교 담당자 (행정실)", "🏛️ 나라장터 계약관리"],
-        label_visibility="collapsed"
-    )
+    _tabs_admin = [
+        "🏢 관리자 (본사 관제)",
+        "🏫 학교 마스터 관리",
+        "📋 서류 유효기간 관리",
+        "💰 견적서 작성",
+        "📄 위수탁계약서 작성",
+        "📦 계약서류 패키지 생성",
+    ]
+    role = st.sidebar.radio("메뉴", _tabs_admin, label_visibility="collapsed")
 else:
     role = _role_map.get(st.session_state.user_role, "🏢 관리자 (본사 관제)")
 
@@ -1724,141 +2466,893 @@ elif role == "🏛️ 교육청 관제 (신규)":
 
 
 # ============================================================
-# [나라장터 계약관리] 🏛️ 탭 UI
+# [섹션 E] 📦 계약서류 패키지 생성 UI (관리자 전용)
 # ============================================================
-elif role == "🏛️ 나라장터 계약관리":
-    st.title("🏛️ 나라장터 수의계약 시뮬레이션")
+elif role == "📦 계약서류 패키지 생성":
+    st.title("📦 계약서류 패키지 자동 생성")
     st.markdown(
-        "<p style='color:#5f6368;font-size:15px;'>"
-        "계약번호 조회 → 초안 PDF 발행 → 승인 → 최종 계약서(도장) 발행</p>",
+        "<p style='color:#5f6368;'>학교 정보 입력 → PDF 3종 자동생성 + 기존 서류 포함 → ZIP 다운로드</p>",
         unsafe_allow_html=True
     )
 
-    # ── 접근 권한 체크 ───────────────────────────────────────
-    if st.session_state.user_role not in ["관리자", "학교"]:
-        st.warning("⚠️ 관리자 및 학교 담당자만 접근할 수 있습니다.")
-        st.stop()
+    # ── 서류 유효기간 D-day 알림 ───────────────────────────
+    st.subheader("📋 서류 유효기간 현황")
+    today_dt = date.today()
+    alert_rows = []
+    for doc in DOC_EXPIRE:
+        exp = date.fromisoformat(doc["expire"])
+        if exp.year == 9999:
+            dday_str = "무기한"
+            status   = "🟢 정상"
+        else:
+            diff     = (exp - today_dt).days
+            dday_str = f"D-{diff}" if diff >= 0 else f"D+{abs(diff)} 만료"
+            if diff < 0:
+                status = "⛔ 만료됨"
+            elif diff <= 30:
+                status = "🔴 만료임박"
+            elif diff <= 60:
+                status = "🟡 주의"
+            else:
+                status = "🟢 정상"
+        alert_rows.append({
+            "서류명": doc["name"],
+            "만료일": doc["expire"] if doc["expire"] != "9999-12-31" else "-",
+            "D-day": dday_str,
+            "상태":  status,
+            "갱신처": doc["renew_url"],
+        })
 
-    # ── DB에서 계약 목록 조회 ────────────────────────────────
-    _gc = get_conn()
-    df_g2b = pd.read_sql_query(
-        "SELECT * FROM g2b_contracts ORDER BY id DESC", _gc
-    )
-    _gc.close()
+    df_doc = pd.DataFrame(alert_rows)
+    # 만료임박/만료 우선 정렬
+    sort_key = {"⛔ 만료됨": 0, "🔴 만료임박": 1, "🟡 주의": 2, "🟢 정상": 3}
+    df_doc["_sort"] = df_doc["상태"].map(sort_key)
+    df_doc = df_doc.sort_values("_sort").drop(columns="_sort")
+    st.dataframe(df_doc, use_container_width=True, hide_index=True)
 
-    # ── 학교 계정: 본인 학교 계약만 표시 ─────────────────────
-    if st.session_state.user_role == "학교":
-        df_g2b = df_g2b[df_g2b["school_name"] == st.session_state.user_org]
+    # 만료임박 경고
+    warn_docs = [r for r in alert_rows if "🔴" in r["상태"] or "⛔" in r["상태"]]
+    if warn_docs:
+        for w in warn_docs:
+            st.warning(f"⚠️ **{w['서류명']}** {w['D-day']} — 갱신 필요: {w['갱신처']}")
 
-    if df_g2b.empty:
-        st.info("조회된 계약이 없습니다.")
-        st.stop()
+    st.divider()
 
-    # ── 계약 목록 표 ─────────────────────────────────────────
-    st.subheader("📋 계약 목록")
-    display_cols = {
-        "contract_no": "계약번호", "school_name": "학교명",
-        "amount": "계약금액(원)", "status": "상태", "created_at": "등록일시"
+    # ── 계약 정보 입력 폼 ──────────────────────────────────
+    st.subheader("🏫 계약 정보 입력")
+
+    # 자주 쓰는 학교 빠른선택
+    SCHOOLS_PRESET = {
+        "직접입력": {},
+        "당곡고등학교": {
+            "biz_no": "", "addr": "서울특별시 관악구",
+            "tel": "", "contract_no": "R26TA01543339 00"
+        },
+        "서초고등학교": {
+            "biz_no": "210-83-00086",
+            "addr": "서울특별시 서초구 반포대로27길 29",
+            "tel": "02-580-3891", "contract_no": ""
+        },
     }
-    st.dataframe(
-        df_g2b.rename(columns=display_cols)[list(display_cols.values())],
-        use_container_width=True
-    )
 
-    st.markdown("---")
+    col_l, col_r = st.columns([1, 2])
+    with col_l:
+        preset = st.selectbox("빠른선택 학교", list(SCHOOLS_PRESET.keys()))
 
-    # ── 계약 선택 ────────────────────────────────────────────
-    sel_no  = st.selectbox(
-        "처리할 계약번호 선택",
-        df_g2b["contract_no"].tolist()
-    )
-    sel_row = df_g2b[df_g2b["contract_no"] == sel_no].iloc[0].to_dict()
+    preset_data = SCHOOLS_PRESET.get(preset, {})
 
-    # KPI 카드
-    ca, cb, cc = st.columns(3)
-    with ca: st.metric("계약번호",  sel_row["contract_no"])
-    with cb: st.metric("계약금액",  f"{sel_row['amount']:,} 원")
-    with cc: st.metric("현재 상태", sel_row["status"])
-
-    st.markdown("---")
-
-    # ── 워크플로우(workflow) 버튼 3단계 ─────────────────────
-    col1, col2, col3 = st.columns(3)
-
-    # [1단계] 초안 PDF 발행
+    col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**1단계: 초안 발행**")
-        if st.button("📄 초안 PDF 생성", use_container_width=True):
-            try:
-                draft_path = generate_g2b_pdf(sel_row, is_final=False)
-                update_g2b_status(sel_no, "초안송신", draft_path)
-                st.session_state["g2b_draft_path"] = draft_path
-                st.success("✅ 초안 PDF가 생성되었습니다.")
-            except Exception as e:
-                st.error(f"❌ PDF 생성 오류: {e}")
-
-        # 초안 다운로드 버튼 (session_state 기반 유지)
-        _dp = st.session_state.get("g2b_draft_path")
-        if _dp and os.path.exists(_dp):
-            with open(_dp, "rb") as f:
-                st.download_button(
-                    "📥 초안 다운로드",
-                    data=f.read(),
-                    file_name=os.path.basename(_dp),
-                    mime="application/pdf",
-                    key="dl_draft",
-                    use_container_width=True
-                )
-
-    # [2단계] 승인
+        school_nm   = st.text_input("학교명 *",
+            value=preset if preset != "직접입력" else "")
+        school_bno  = st.text_input("학교 사업자번호",
+            value=preset_data.get("biz_no",""))
+        school_addr = st.text_input("학교 주소",
+            value=preset_data.get("addr",""))
+        school_tel  = st.text_input("학교 전화",
+            value=preset_data.get("tel",""))
     with col2:
-        st.markdown("**2단계: 승인 처리**")
-        _can_approve = sel_row["status"] in ["초안송신", "승인완료"]
-        if st.button(
-            "✅ 승인 완료 처리",
+        start_dt    = st.text_input("계약 시작일 (YYYY-MM-DD)", "2026-03-01")
+        end_dt      = st.text_input("계약 종료일 (YYYY-MM-DD)", "2027-02-28")
+        unit_p      = st.number_input("단가 (원/L)", value=180, step=10)
+        volume      = st.number_input("월 예상 수거량 (L)", value=0.0, step=100.0,
+                                       help="0이면 견적서 수량란 공백 처리")
+        amt_str     = st.text_input("계약 총금액 (표시용)", "")
+
+    # ── 생성 버튼 ──────────────────────────────────────────
+    st.divider()
+    if st.button("🚀 계약서류 패키지 ZIP 생성", type="primary",
+                 use_container_width=True):
+        if not school_nm.strip():
+            st.error("❌ 학교명을 입력해주세요.")
+        else:
+            with st.spinner("📄 PDF 생성 중... (3~10초 소요)"):
+                try:
+                    zip_bytes, errs = generate_contract_package(
+                        school_name      = school_nm.strip(),
+                        school_biz_no    = school_bno.strip(),
+                        school_addr      = school_addr.strip(),
+                        school_tel       = school_tel.strip(),
+                        start_date       = start_dt.strip(),
+                        end_date         = end_dt.strip(),
+                        volume_l         = float(volume),
+                        unit_price       = int(unit_p),
+                        contract_amount  = amt_str.strip(),
+                    )
+                    st.session_state["pkg_zip"]    = zip_bytes
+                    st.session_state["pkg_school"] = school_nm.strip()
+                    st.session_state["pkg_errors"] = errs
+                    st.success(f"✅ 패키지 생성 완료! ({len(zip_bytes)/1024:.1f} KB)")
+                except Exception as e:
+                    st.error(f"❌ 생성 오류: {e}")
+
+    # ── 다운로드 버튼 (session_state 유지) ────────────────
+    pkg = st.session_state.get("pkg_zip")
+    pkg_school = st.session_state.get("pkg_school", "학교")
+    pkg_errors = st.session_state.get("pkg_errors", {})
+
+    if pkg:
+        fname_zip = f"계약서류패키지_{pkg_school}_{date.today().strftime('%Y%m%d')}.zip"
+        st.download_button(
+            label    = f"📥 {fname_zip} 다운로드",
+            data     = pkg,
+            file_name= fname_zip,
+            mime     = "application/zip",
+            key      = "dl_contract_pkg",
             use_container_width=True,
-            disabled=not _can_approve,          # 초안송신 상태일 때만 활성화
-            type="primary"
-        ):
-            update_g2b_status(sel_no, "승인완료")
-            st.success("✅ 승인 완료 상태로 변경되었습니다.")
+            type     = "primary",
+        )
+
+        # 포함 서류 목록 표시
+        with st.expander("📂 포함 서류 목록 보기"):
+            st.markdown("""
+**[자동 생성 PDF]**
+- 📄 음식물 견적서
+- 📄 폐기물 위수탁 계약서
+- 📄 계약이행 통합 서약서
+
+**[기존 서류]**
+- 🖼️ 사업자등록증
+- 🖼️ 폐기물수집운반업 허가증
+- 📄 소상공인 확인서 ⚠️ 2026-03-31 만료
+- 📄 창업기업 확인서
+- 📄 재해율 확인서
+- 🖼️ 사업자 계좌 통장사본
+- 📋 서류 체크리스트 (자동생성)
+            """)
+
+        if pkg_errors:
+            with st.expander("⚠️ PDF 생성 오류 목록"):
+                for k, v in pkg_errors.items():
+                    st.error(f"**{k}**: {v}")
+                st.info("💡 한글 폰트(malgun.ttf)가 없으면 일부 PDF에서 한글이 깨질 수 있습니다.")
+
+    # ── 하영자원 정보 요약 ─────────────────────────────────
+    with st.expander("ℹ️ 하영자원 고정 정보 확인"):
+        df_hy = pd.DataFrame([
+            {"항목": k, "내용": v} for k, v in HY.items()
+        ])
+        st.dataframe(df_hy, use_container_width=True, hide_index=True)
+        st.caption("※ 위 정보는 모든 서류에 자동으로 입력됩니다.")
+
+
+# ============================================================
+# [섹션 D] 📄 위수탁계약서 단독 작성 UI (관리자 전용)
+# ============================================================
+elif role == "📄 위수탁계약서 작성":
+    st.title("📄 폐기물 위수탁 운반 처리 계약서")
+    st.markdown(
+        "<p style='color:#5f6368;'>학교 정보 입력 → 계약서 PDF 즉시 생성 · 다운로드</p>",
+        unsafe_allow_html=True
+    )
+
+    # ── 빠른 선택 ────────────────────────────────────────────
+    D_SCHOOLS = {
+        "직접입력":     {"biz_no": "", "addr": "", "tel": "", "waste": "음식물류폐기물"},
+        "서초고등학교": {
+            "biz_no": "210-83-00086",
+            "addr":   "서울특별시 서초구 반포대로27길 29",
+            "tel":    "02-580-3891",
+            "waste":  "음식물류폐기물",
+        },
+        "당곡고등학교": {
+            "biz_no": "",
+            "addr":   "서울특별시 관악구",
+            "tel":    "",
+            "waste":  "음식물류폐기물",
+        },
+    }
+
+    d_preset = st.selectbox("🏫 빠른선택 학교", list(D_SCHOOLS.keys()), key="d_preset")
+    d_data   = D_SCHOOLS[d_preset]
+
+    st.divider()
+
+    # ── 입력 폼 ──────────────────────────────────────────────
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### 📌 배출자 (갑) 정보")
+        d_school   = st.text_input("학교명 *",
+            value=d_preset if d_preset != "직접입력" else "",
+            key="d_school")
+        d_biz_no   = st.text_input("사업자번호",
+            value=d_data["biz_no"], key="d_biz_no")
+        d_addr     = st.text_input("학교 주소",
+            value=d_data["addr"], key="d_addr")
+        d_tel      = st.text_input("학교 전화번호",
+            value=d_data["tel"], key="d_tel")
+
+    with col2:
+        st.markdown("##### 📋 계약 내용")
+        d_start    = st.text_input("계약 시작일 (YYYY-MM-DD)", "2026-03-01", key="d_start")
+        d_end      = st.text_input("계약 종료일 (YYYY-MM-DD)", "2027-02-28", key="d_end")
+        d_waste    = st.text_input("폐기물 종류", value=d_data["waste"], key="d_waste")
+        d_volume   = st.text_input("물량 (예: 월 500L 내외)", "", key="d_volume")
+        d_unit     = st.number_input("단가 (원/L)", value=180, step=10, key="d_unit")
+        d_amount   = st.text_input("계약 총금액 (표시용, 예: 1,080,000원)", "", key="d_amount")
+
+    st.divider()
+
+    # ── 미리보기 요약 ─────────────────────────────────────────
+    with st.expander("📋 입력 내용 미리보기"):
+        prev = {
+            "배출자(갑)": d_school, "사업자번호": d_biz_no,
+            "주소": d_addr, "전화": d_tel,
+            "계약기간": f"{d_start} ~ {d_end}",
+            "폐기물 종류": d_waste, "물량": d_volume,
+            "단가": f"{d_unit}원/L", "계약금액": d_amount,
+            "운반자(을)": HY["name"], "처리업체": HY["processor"],
+        }
+        df_prev = pd.DataFrame(list(prev.items()), columns=["항목", "내용"])
+        st.dataframe(df_prev, use_container_width=True, hide_index=True)
+
+    # ── 생성 버튼 ─────────────────────────────────────────────
+    if st.button("📄 위수탁계약서 PDF 생성", type="primary",
+                 use_container_width=True, key="d_gen"):
+        if not d_school.strip():
+            st.error("❌ 학교명을 입력해주세요.")
+        else:
+            with st.spinner("📄 PDF 생성 중..."):
+                try:
+                    pdf_path = generate_contract_doc_pdf(
+                        school_name    = d_school.strip(),
+                        school_biz_no  = d_biz_no.strip(),
+                        school_addr    = d_addr.strip(),
+                        school_tel     = d_tel.strip(),
+                        start_date     = d_start.strip(),
+                        end_date       = d_end.strip(),
+                        waste_type     = d_waste.strip() or "음식물류폐기물",
+                        volume_str     = d_volume.strip(),
+                        unit_price     = int(d_unit),
+                        contract_amount= d_amount.strip(),
+                    )
+                    with open(pdf_path, "rb") as f:
+                        st.session_state["d_pdf_bytes"] = f.read()
+                    st.session_state["d_pdf_name"] = (
+                        f"위수탁계약서_{d_school.strip()}_{date.today().strftime('%Y%m%d')}.pdf"
+                    )
+                    st.success("✅ PDF 생성 완료!")
+                except Exception as e:
+                    st.error(f"❌ 오류: {e}")
+                    st.info("💡 한글 폰트(malgun.ttf)가 설치되어 있는지 확인하세요.")
+
+    # ── 다운로드 ──────────────────────────────────────────────
+    d_pdf  = st.session_state.get("d_pdf_bytes")
+    d_name = st.session_state.get("d_pdf_name", "위수탁계약서.pdf")
+
+    if d_pdf:
+        st.download_button(
+            label         = f"📥 {d_name} 다운로드",
+            data          = d_pdf,
+            file_name     = d_name,
+            mime          = "application/pdf",
+            key           = "d_dl",
+            use_container_width=True,
+            type          = "primary",
+        )
+        st.caption("💡 다운로드 후 출력 → 학교장 / 하영자원 대표자 각 1부 보관")
+
+    # ── 하영자원(을) 정보 요약 ────────────────────────────────
+    with st.expander("ℹ️ 운반자(을) 하영자원 고정 정보"):
+        df_hy2 = pd.DataFrame([{"항목": k, "내용": v} for k, v in HY.items()])
+        st.dataframe(df_hy2, use_container_width=True, hide_index=True)
+        st.caption("※ 위 정보는 계약서에 자동으로 입력됩니다.")
+
+
+# ============================================================
+# [섹션 C] 📋 서류 유효기간 관리 UI (관리자 전용)
+# ============================================================
+elif role == "📋 서류 유효기간 관리":
+    st.title("📋 서류 유효기간 관리")
+    st.markdown(
+        "<p style='color:#5f6368;'>계약 서류 만료일 추적 · 갱신 관리 · 알림 센터</p>",
+        unsafe_allow_html=True
+    )
+
+    # ── 상단 요약 카드 ────────────────────────────────────────
+    all_docs = c_get_all_docs()
+    n_exp    = sum(1 for d in all_docs if d["상태"] == "⛔ 만료됨")
+    n_red    = sum(1 for d in all_docs if d["상태"] == "🔴 만료임박")
+    n_yel    = sum(1 for d in all_docs if d["상태"] == "🟡 주의")
+    n_ok     = sum(1 for d in all_docs if d["상태"] == "🟢 정상")
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("⛔ 만료됨",   n_exp,  delta=None)
+    mc2.metric("🔴 만료임박", n_red,  delta=None)
+    mc3.metric("🟡 주의",     n_yel,  delta=None)
+    mc4.metric("🟢 정상",     n_ok,   delta=None)
+
+    # 긴급 배너
+    urgent = [d for d in all_docs if d["상태"] in ("⛔ 만료됨", "🔴 만료임박") and not d["갱신완료"]]
+    if urgent:
+        st.error(f"🚨 **즉시 조치 필요한 서류 {len(urgent)}건**")
+        for u in urgent:
+            st.warning(f"**{u['서류명']}** — {u['상태']}  |  만료일: {u['만료일']}  |  {u['D-day']}  |  갱신처: {u['갱신처']}")
+    else:
+        st.success("✅ 만료임박 서류 없음")
+
+    st.divider()
+
+    # ── 서류 목록 테이블 ──────────────────────────────────────
+    st.subheader("📑 전체 서류 목록")
+
+    # 필터
+    cf1, cf2 = st.columns([2, 1])
+    with cf1:
+        filter_status = st.multiselect(
+            "상태 필터", ["⛔ 만료됨", "🔴 만료임박", "🟡 주의", "🟢 정상"],
+            default=["⛔ 만료됨", "🔴 만료임박", "🟡 주의", "🟢 정상"],
+            key="c_filter"
+        )
+    with cf2:
+        hide_renewed = st.checkbox("갱신완료 서류 숨기기", value=False, key="c_hide_renewed")
+
+    display_docs = [
+        d for d in all_docs
+        if d["상태"] in filter_status
+        and not (hide_renewed and d["갱신완료"])
+    ]
+
+    if not display_docs:
+        st.info("해당 조건의 서류가 없습니다.")
+    else:
+        df_c = pd.DataFrame([{
+            "ID":    d["id"],
+            "서류명": d["서류명"],
+            "만료일": d["만료일"],
+            "D-day": d["D-day"],
+            "상태":  d["상태"],
+            "갱신처": d["갱신처"],
+            "갱신완료": "✅" if d["갱신완료"] else "□",
+            "메모":  d["메모"],
+        } for d in display_docs])
+
+        st.dataframe(df_c, use_container_width=True, hide_index=True,
+                     column_config={
+                         "ID":     st.column_config.NumberColumn(width="small"),
+                         "서류명": st.column_config.TextColumn(width="medium"),
+                         "D-day":  st.column_config.TextColumn(width="small"),
+                         "상태":   st.column_config.TextColumn(width="small"),
+                         "갱신완료": st.column_config.TextColumn(width="small"),
+                     })
+
+    st.divider()
+
+    # ── 서류 수정 폼 ──────────────────────────────────────────
+    st.subheader("✏️ 서류 정보 수정")
+
+    if all_docs:
+        doc_names = {d["서류명"]: d for d in all_docs}
+        sel_doc_name = st.selectbox("수정할 서류 선택", list(doc_names.keys()), key="c_sel")
+        sel_doc = doc_names[sel_doc_name]
+
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            e_issued  = st.text_input("발급일 (YYYY-MM-DD)",
+                value=sel_doc["발급일"] or "", key="c_e_issued")
+            e_expire  = st.text_input("만료일 (YYYY-MM-DD, 무기한=9999-12-31)",
+                value=sel_doc["만료일"] if sel_doc["만료일"] != "무기한" else "9999-12-31",
+                key="c_e_expire")
+            e_renewed = st.checkbox("갱신 완료 처리",
+                value=sel_doc["갱신완료"], key="c_e_renewed")
+        with ec2:
+            e_renew_url = st.text_input("갱신처 URL/기관",
+                value=sel_doc["갱신처"], key="c_e_url")
+            e_file_note = st.text_input("파일 비고",
+                value=sel_doc["비고"], key="c_e_note")
+            e_memo      = st.text_area("메모 (자유 입력)",
+                value=sel_doc["메모"], height=80, key="c_e_memo")
+
+        cb1, cb2 = st.columns(2)
+        with cb1:
+            if st.button("💾 저장", type="primary", use_container_width=True, key="c_save"):
+                try:
+                    c_update_doc(
+                        doc_id=sel_doc["id"],
+                        issued=e_issued.strip(),
+                        expire=e_expire.strip(),
+                        renew_url=e_renew_url.strip(),
+                        file_note=e_file_note.strip(),
+                        renewed=e_renewed,
+                        memo=e_memo.strip(),
+                    )
+                    st.success(f"✅ **{sel_doc_name}** 정보가 업데이트되었습니다.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 저장 오류: {e}")
+        with cb2:
+            if st.button("🔄 갱신완료 토글", use_container_width=True, key="c_toggle"):
+                c_toggle_renewed(sel_doc["id"])
+                st.rerun()
+
+    st.divider()
+
+    # ── 서류 신규 추가 ────────────────────────────────────────
+    with st.expander("➕ 서류 신규 추가"):
+        na1, na2 = st.columns(2)
+        with na1:
+            n_name   = st.text_input("서류명 *", key="c_n_name")
+            n_issued = st.text_input("발급일 (YYYY-MM-DD)", key="c_n_issued")
+            n_expire = st.text_input("만료일 (YYYY-MM-DD)", key="c_n_expire")
+        with na2:
+            n_url    = st.text_input("갱신처", key="c_n_url")
+            n_note   = st.text_input("파일 비고", key="c_n_note")
+            n_memo   = st.text_area("메모", height=68, key="c_n_memo")
+
+        if st.button("➕ 추가", type="primary", use_container_width=True, key="c_add"):
+            if not n_name.strip():
+                st.error("❌ 서류명을 입력하세요.")
+            elif not n_expire.strip():
+                st.error("❌ 만료일을 입력하세요.")
+            else:
+                try:
+                    c_add_doc(n_name.strip(), n_issued.strip(), n_expire.strip(),
+                              n_url.strip(), n_note.strip(), n_memo.strip())
+                    st.success(f"✅ **{n_name.strip()}** 추가 완료")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 추가 오류: {e}")
+
+    # ── 서류 삭제 ─────────────────────────────────────────────
+    with st.expander("🗑️ 서류 삭제 (기본 7종 제외 추천)"):
+        del_names = {d["서류명"]: d["id"] for d in all_docs}
+        del_sel   = st.selectbox("삭제할 서류", list(del_names.keys()), key="c_del_sel")
+        if st.button(f"🗑️ '{del_sel}' 삭제", type="secondary",
+                     use_container_width=True, key="c_del_btn"):
+            c_delete_doc(del_names[del_sel])
+            st.success(f"🗑️ **{del_sel}** 삭제 완료")
             st.rerun()
 
-    # [3단계] 최종 계약 체결 + 도장 날인 PDF
-    with col3:
-        st.markdown("**3단계: 계약 체결**")
-        _can_sign = sel_row["status"] == "승인완료"
-        if st.button(
-            "🖋️ 계약 체결 (도장 날인)",
+    st.divider()
+
+    # ── D-day 캘린더 뷰 ──────────────────────────────────────
+    st.subheader("📅 만료일 타임라인")
+    timeline_docs = [d for d in all_docs if d["만료일"] != "무기한"]
+    if timeline_docs:
+        today_dt = date.today()
+        tl_rows  = []
+        for d in sorted(timeline_docs, key=lambda x: x["만료일"]):
+            exp   = date.fromisoformat(d["만료일"])
+            diff  = (exp - today_dt).days
+            bar_w = max(0, min(100, int((1 - diff / 365) * 100))) if diff <= 365 else 0
+            tl_rows.append({
+                "서류명":  d["서류명"],
+                "만료일":  d["만료일"],
+                "D-day":  d["D-day"],
+                "상태":    d["상태"],
+                "진행률":  bar_w,
+            })
+        df_tl = pd.DataFrame(tl_rows)
+        st.dataframe(
+            df_tl,
             use_container_width=True,
-            disabled=not _can_sign,             # 승인완료 상태일 때만 활성화
-            type="primary"
-        ):
-            try:
-                final_path = generate_g2b_pdf(sel_row, is_final=True)
-                update_g2b_status(sel_no, "계약체결", final_path)
-                st.session_state["g2b_final_path"] = final_path
-                st.success("🎉 계약이 체결되었습니다. 최종 계약서를 다운로드하세요.")
-            except Exception as e:
-                st.error(f"❌ 최종 PDF 생성 오류: {e}")
-
-        # 최종 계약서 다운로드 버튼
-        _fp = st.session_state.get("g2b_final_path")
-        # DB에 저장된 pdf_path 도 확인 (재접속 시에도 다운로드 가능)
-        if not _fp and sel_row.get("pdf_path") and os.path.exists(str(sel_row["pdf_path"])):
-            _fp = sel_row["pdf_path"]
-        if _fp and os.path.exists(str(_fp)):
-            with open(_fp, "rb") as f:
-                st.download_button(
-                    "📥 최종 계약서 다운로드",
-                    data=f.read(),
-                    file_name=os.path.basename(str(_fp)),
-                    mime="application/pdf",
-                    key="dl_final",
-                    use_container_width=True
+            hide_index=True,
+            column_config={
+                "진행률": st.column_config.ProgressColumn(
+                    "⏱️ 만료 진행률", min_value=0, max_value=100
                 )
+            }
+        )
+    else:
+        st.info("만료일이 설정된 서류가 없습니다.")
 
-    # ── 상태 흐름 안내 ───────────────────────────────────────
-    st.markdown("---")
-    st.caption("📌 상태 흐름: 초안송신 → (1단계 초안 생성) → 승인완료 → (2단계 승인) → 계약체결 → (3단계 도장 날인 PDF 발행)")
+    # ── 갱신 가이드 ──────────────────────────────────────────
+    with st.expander("📖 주요 서류 갱신 가이드"):
+        st.markdown("""
+| 서류명 | 갱신 방법 | 소요시간 |
+|--------|-----------|---------|
+| 소상공인 확인서 | [sminfo.mss.go.kr](https://sminfo.mss.go.kr) 접속 → 공동인증서 로그인 → 즉시 발급 | 5분 |
+| 창업기업 확인서 | 중소벤처기업부 창업지원포털 → 개업일 7년 이내 발급 | 1일 |
+| 재해율 확인서 | 안전보건공단 kosha.or.kr → 사업장 재해율 확인서 발급 | 당일 |
+| 사업자등록증 | 홈택스 hometax.go.kr → 사업자등록증 재발급 | 즉시 |
+| 허가증 | 화성시청 환경부서 방문 또는 팩스 신청 | 3~5일 |
+        """)
 
+
+# ============================================================
+# [섹션 B] 💰 견적서 작성 UI (관리자 전용)
+# ============================================================
+elif role == "💰 견적서 작성":
+    st.title("💰 음식물 견적서 작성")
+    st.markdown(
+        "<p style='color:#5f6368;'>학교별 단가·수거량 입력 → 견적서 PDF 즉시 생성 · 다운로드</p>",
+        unsafe_allow_html=True
+    )
+
+    # ── 빠른선택 학교 ─────────────────────────────────────────
+    B_SCHOOLS = {
+        "직접입력": {"biz_no": "", "unit": 180, "volume": 0.0, "period": "2026.03.01 ~ 2027.02.28"},
+        "서초고등학교":  {"biz_no": "210-83-00086", "unit": 180, "volume": 0.0,   "period": "2026.03.01 ~ 2027.02.28"},
+        "당곡고등학교":  {"biz_no": "",             "unit": 150, "volume": 0.0,   "period": "2026.03.01 ~ 2027.02.28"},
+        "국제고등학교":  {"biz_no": "",             "unit": 150, "volume": 0.0,   "period": "2026.03.01 ~ 2027.02.28"},
+        "부림초등학교":  {"biz_no": "",             "unit": 120, "volume": 0.0,   "period": "2026.03.01 ~ 2027.02.28"},
+    }
+    # DB 등록 학교 동적 추가
+    try:
+        db_schools = [r[0] for r in get_conn().execute(
+            "SELECT DISTINCT 학교명 FROM school_prices ORDER BY 학교명"
+        ).fetchall()]
+        for s in db_schools:
+            if s not in B_SCHOOLS:
+                B_SCHOOLS[s] = {"biz_no": "", "unit": 150, "volume": 0.0,
+                                 "period": "2026.03.01 ~ 2027.02.28"}
+    except Exception:
+        pass
+
+    b_preset = st.selectbox("🏫 빠른선택 학교", list(B_SCHOOLS.keys()), key="b_preset")
+    b_data   = B_SCHOOLS[b_preset]
+
+    st.divider()
+
+    # ── 입력 폼 ──────────────────────────────────────────────
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### 🏫 고객(학교) 정보")
+        b_school  = st.text_input("학교명 *",
+            value=b_preset if b_preset != "직접입력" else "",
+            key="b_school")
+        b_biz_no  = st.text_input("학교 사업자번호",
+            value=b_data["biz_no"], key="b_biz_no")
+        b_period  = st.text_input("계약기간",
+            value=b_data["period"], key="b_period")
+
+    with col2:
+        st.markdown("##### 💵 단가 및 수량")
+        b_unit    = st.number_input("단가 (원/L) *", value=b_data["unit"],
+                                     min_value=1, step=10, key="b_unit")
+        b_volume  = st.number_input("연간 예상 수거량 (L)",
+                                     value=b_data["volume"],
+                                     min_value=0.0, step=100.0,
+                                     help="0 입력 시 견적서 수량란 공백 처리",
+                                     key="b_volume")
+        # 공급가액 실시간 계산
+        supply_amt = int(b_volume * b_unit) if b_volume > 0 else 0
+        st.metric("공급가액 (자동 계산)", f"{supply_amt:,}원",
+                  help="단가 × 수거량")
+
+    # ── 미리보기 요약 ─────────────────────────────────────────
+    with st.expander("📋 견적 내용 미리보기"):
+        prev_b = {
+            "고객명":   b_school,
+            "사업자번호": b_biz_no,
+            "견적일":   date.today().strftime("%Y.%m.%d"),
+            "계약기간": b_period,
+            "단가":     f"{b_unit}원/L",
+            "수거량":   f"{b_volume:,.0f}L" if b_volume else "(미입력)",
+            "공급가액": f"{supply_amt:,}원" if supply_amt else "(수량 입력 후 자동계산)",
+            "세금":     "면세",
+            "공급자":   f"{HY['name']} / {HY['ceo']} / {HY['biz_no']}",
+            "연락처":   f"{HY['tel']} / {HY['email']}",
+        }
+        df_prev_b = pd.DataFrame(list(prev_b.items()), columns=["항목", "내용"])
+        st.dataframe(df_prev_b, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── 생성 버튼 ─────────────────────────────────────────────
+    if st.button("💰 견적서 PDF 생성", type="primary",
+                 use_container_width=True, key="b_gen"):
+        if not b_school.strip():
+            st.error("❌ 학교명을 입력해주세요.")
+        else:
+            with st.spinner("📄 PDF 생성 중..."):
+                try:
+                    pdf_path = generate_estimate_pdf(
+                        school_name    = b_school.strip(),
+                        school_biz_no  = b_biz_no.strip(),
+                        volume_l       = float(b_volume),
+                        unit_price     = int(b_unit),
+                        contract_period= b_period.strip(),
+                    )
+                    with open(pdf_path, "rb") as f:
+                        st.session_state["b_pdf_bytes"] = f.read()
+                    st.session_state["b_pdf_name"] = (
+                        f"음식물견적서_{b_school.strip()}_{date.today().strftime('%Y%m%d')}.pdf"
+                    )
+                    st.success("✅ 견적서 PDF 생성 완료!")
+                except Exception as e:
+                    st.error(f"❌ 오류: {e}")
+                    st.info("💡 한글 폰트(malgun.ttf)가 설치되어 있는지 확인하세요.")
+
+    # ── 다운로드 ──────────────────────────────────────────────
+    b_pdf  = st.session_state.get("b_pdf_bytes")
+    b_name = st.session_state.get("b_pdf_name", "음식물견적서.pdf")
+
+    if b_pdf:
+        st.download_button(
+            label         = f"📥 {b_name} 다운로드",
+            data          = b_pdf,
+            file_name     = b_name,
+            mime          = "application/pdf",
+            key           = "b_dl",
+            use_container_width=True,
+            type          = "primary",
+        )
+        st.caption("💡 다운로드 후 출력 → 학교 제출 또는 계약서류 패키지에 포함")
+
+    st.divider()
+
+    # ── 일괄 견적 비교 (다학교) ──────────────────────────────
+    with st.expander("📊 다학교 단가 비교표"):
+        st.markdown("##### 현재 등록 학교별 단가 현황")
+        try:
+            price_rows = get_conn().execute(
+                "SELECT 학교명, 음식물단가 FROM school_prices ORDER BY 음식물단가 DESC"
+            ).fetchall()
+            if price_rows:
+                df_prices = pd.DataFrame(price_rows, columns=["학교명", "단가(원/L)"])
+                df_prices["월 평균 견적(500L 기준)"] = df_prices["단가(원/L)"].apply(
+                    lambda p: f"{int(p)*500:,}원"
+                )
+                st.dataframe(df_prices, use_container_width=True, hide_index=True)
+            else:
+                st.info("등록된 학교 단가 정보가 없습니다.")
+        except Exception as e:
+            st.warning(f"단가 조회 오류: {e}")
+
+    # ── 하영자원 공급자 정보 ──────────────────────────────────
+    with st.expander("ℹ️ 공급자(하영자원) 고정 정보"):
+        df_hy3 = pd.DataFrame([{"항목": k, "내용": v} for k, v in HY.items()])
+        st.dataframe(df_hy3, use_container_width=True, hide_index=True)
+        st.caption("※ 위 정보는 견적서에 자동으로 입력됩니다.")
+
+
+# ============================================================
+# [섹션 A] 🏫 학교 마스터 관리 UI (관리자 전용)
+# ============================================================
+elif role == "🏫 학교 마스터 관리":
+    st.title("🏫 학교 마스터 관리")
+    st.markdown(
+        "<p style='color:#5f6368;'>전체 계약 학교 정보 · 계약 이력 · 만료 D-day 통합 관리</p>",
+        unsafe_allow_html=True
+    )
+
+    all_schools = a_get_all_schools()
+
+    # ── 상단 요약 카드 ─────────────────────────────────────
+    n_active  = sum(1 for s in all_schools if s["계약상태"] == "계약중")
+    n_expire  = sum(1 for s in all_schools if "🔴" in s["계약D-day"] or "⛔" in s["계약D-day"])
+    n_none    = sum(1 for s in all_schools if s["계약상태"] == "미계약")
+    n_total   = len(all_schools)
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("🏫 전체 학교",   n_total)
+    mc2.metric("✅ 계약중",      n_active)
+    mc3.metric("🔴 만료임박",    n_expire)
+    mc4.metric("⚪ 미계약",      n_none)
+
+    # 만료임박 경고
+    exp_schools = [s for s in all_schools
+                   if ("🔴" in s["계약D-day"] or "⛔" in s["계약D-day"])
+                   and s["계약상태"] == "계약중"]
+    if exp_schools:
+        st.error(f"🚨 **계약 만료임박 학교 {len(exp_schools)}곳**")
+        for s in exp_schools:
+            st.warning(
+                f"**{s['학교명']}** — {s['계약D-day']}  |  "
+                f"만료일: {s['계약종료']}  |  {s['교육청']}"
+            )
+
+    st.divider()
+
+    # ── 학교 목록 탭 ──────────────────────────────────────
+    tab_list, tab_edit, tab_contract = st.tabs(
+        ["📑 전체 목록", "✏️ 학교 정보 수정", "📂 계약 이력"]
+    )
+
+    # ▸ 탭1: 전체 목록
+    with tab_list:
+        # 필터
+        fl1, fl2 = st.columns(2)
+        with fl1:
+            edu_list   = ["전체"] + sorted({s["교육청"] for s in all_schools if s["교육청"]})
+            sel_edu_f  = st.selectbox("교육청 필터", edu_list, key="a_edu_f")
+        with fl2:
+            sta_list   = ["전체", "계약중", "미계약", "계약만료", "협의중"]
+            sel_sta_f  = st.selectbox("계약상태 필터", sta_list, key="a_sta_f")
+
+        filtered = [
+            s for s in all_schools
+            if (sel_edu_f == "전체" or s["교육청"] == sel_edu_f)
+            and (sel_sta_f == "전체" or s["계약상태"] == sel_sta_f)
+        ]
+
+        df_a = pd.DataFrame([{
+            "학교명":     s["학교명"],
+            "교육청":     s["교육청"],
+            "단가(원/L)": s["음식물단가"],
+            "계약상태":   s["계약상태"],
+            "계약만료":   s["계약종료"] or "-",
+            "D-day":     s["계약D-day"],
+            "담당자전화": s["전화"] or "-",
+        } for s in filtered])
+
+        st.dataframe(df_a, use_container_width=True, hide_index=True,
+                     column_config={
+                         "단가(원/L)": st.column_config.NumberColumn(format="%d원"),
+                         "D-day":     st.column_config.TextColumn(width="small"),
+                     })
+        st.caption(f"총 {len(filtered)}개 학교 표시 중 (전체 {n_total}개)")
+
+        # CSV 다운로드
+        csv_buf = io.StringIO()
+        df_a.to_csv(csv_buf, index=False, encoding="utf-8-sig")
+        st.download_button(
+            "📥 학교 목록 CSV 다운로드",
+            data=csv_buf.getvalue().encode("utf-8-sig"),
+            file_name=f"학교마스터_{date.today().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            key="a_csv_dl"
+        )
+
+    # ▸ 탭2: 학교 정보 수정
+    with tab_edit:
+        school_names = [s["학교명"] for s in all_schools]
+        sel_school   = st.selectbox("수정할 학교 선택", school_names, key="a_sel_school")
+        sel_s        = next((s for s in all_schools if s["학교명"] == sel_school), {})
+
+        # 담당자 정보 별도 조회
+        try:
+            sp_row = get_conn().execute(
+                "SELECT 담당자명, 담당자연락처, 담당자이메일 FROM school_prices WHERE 학교명=?",
+                (sel_school,)
+            ).fetchone() or ("", "", "")
+        except Exception:
+            sp_row = ("", "", "")
+
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            st.markdown("##### 🏫 학교 기본정보")
+            a_biz_no = st.text_input("사업자번호",  value=sel_s.get("사업자번호",""), key="a_e_bno")
+            a_addr   = st.text_input("주소",        value=sel_s.get("주소",""),       key="a_e_addr")
+            a_tel    = st.text_input("전화번호",    value=sel_s.get("전화",""),        key="a_e_tel")
+            a_unit   = st.number_input("음식물 단가(원/L)",
+                                        value=int(sel_s.get("음식물단가", 150)),
+                                        min_value=1, step=10, key="a_e_unit")
+        with ec2:
+            st.markdown("##### 📋 계약 및 담당자")
+            a_start  = st.text_input("계약 시작일", value=sel_s.get("계약시작",""), key="a_e_start")
+            a_end    = st.text_input("계약 종료일", value=sel_s.get("계약종료",""), key="a_e_end")
+            a_status = st.selectbox("계약 상태",
+                                    ["계약중","미계약","계약만료","협의중"],
+                                    index=["계약중","미계약","계약만료","협의중"].index(
+                                        sel_s.get("계약상태","미계약")
+                                        if sel_s.get("계약상태","미계약") in ["계약중","미계약","계약만료","협의중"]
+                                        else "미계약"),
+                                    key="a_e_status")
+            a_mgr    = st.text_input("담당자명",    value=sp_row[0], key="a_e_mgr")
+            a_mgr_t  = st.text_input("담당자연락처",value=sp_row[1], key="a_e_mgr_t")
+            a_mgr_e  = st.text_input("담당자이메일",value=sp_row[2], key="a_e_mgr_e")
+        a_note = st.text_area("비고", value=sel_s.get("비고",""), height=60, key="a_e_note")
+
+        if st.button("💾 저장", type="primary", use_container_width=True, key="a_save"):
+            try:
+                a_update_school(
+                    학교명=sel_school, 단가=int(a_unit),
+                    사업자번호=a_biz_no.strip(), 주소=a_addr.strip(),
+                    전화=a_tel.strip(), 시작일=a_start.strip(),
+                    종료일=a_end.strip(), 상태=a_status,
+                    비고=a_note.strip(), 담당자명=a_mgr.strip(),
+                    담당자연락처=a_mgr_t.strip(), 담당자이메일=a_mgr_e.strip(),
+                )
+                st.success(f"✅ **{sel_school}** 정보 저장 완료")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 저장 오류: {e}")
+
+        st.divider()
+        with st.expander("➕ 신규 학교 추가"):
+            na1, na2 = st.columns(2)
+            with na1:
+                n_nm    = st.text_input("학교명 *",  key="a_n_nm")
+                n_edu   = st.text_input("교육청",     key="a_n_edu")
+                n_unit2 = st.number_input("단가(원/L)", value=150, min_value=1, step=10, key="a_n_unit")
+                n_bno   = st.text_input("사업자번호", key="a_n_bno")
+            with na2:
+                n_addr2 = st.text_input("주소",       key="a_n_addr")
+                n_tel2  = st.text_input("전화",        key="a_n_tel")
+                n_s2    = st.text_input("계약시작일", key="a_n_start")
+                n_e2    = st.text_input("계약종료일", key="a_n_end")
+            n_sta2  = st.selectbox("계약상태", ["미계약","계약중","협의중"], key="a_n_sta")
+            n_note2 = st.text_input("비고", key="a_n_note")
+            if st.button("➕ 학교 추가", type="primary", use_container_width=True, key="a_add"):
+                if not n_nm.strip():
+                    st.error("❌ 학교명을 입력하세요.")
+                else:
+                    try:
+                        a_add_school(n_nm.strip(), n_edu.strip(), int(n_unit2),
+                                     n_bno.strip(), n_addr2.strip(), n_tel2.strip(),
+                                     n_s2.strip(), n_e2.strip(), n_sta2, n_note2.strip())
+                        st.success(f"✅ **{n_nm.strip()}** 추가 완료")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 추가 오류: {e}")
+
+    # ▸ 탭3: 계약 이력
+    with tab_contract:
+        st.markdown("##### 📂 전체 계약 이력")
+
+        # 학교 필터
+        c_school_filter = st.selectbox(
+            "학교 선택 (전체 조회=전체)",
+            ["전체"] + school_names,
+            key="a_c_filter"
+        )
+        contracts = a_get_contracts(
+            학교명=None if c_school_filter == "전체" else c_school_filter
+        )
+
+        if contracts:
+            df_con = pd.DataFrame([{
+                "ID":       c["id"],
+                "학교명":   c["학교명"],
+                "계약기간": f"{c['계약_시작일']} ~ {c['계약_종료일']}",
+                "단가(원/L)": c["단가"],
+                "상태":     c["계약_상태"],
+                "D-day":   c.get("D-day",""),
+                "나라장터": c["나라장터_번호"] or "-",
+                "비고":     c["비고"] or "-",
+            } for c in contracts])
+            st.dataframe(df_con, use_container_width=True, hide_index=True)
+        else:
+            st.info("등록된 계약 이력이 없습니다.")
+
+        st.divider()
+        with st.expander("➕ 계약 이력 신규 등록"):
+            ci1, ci2 = st.columns(2)
+            with ci1:
+                ci_school  = st.selectbox("학교명 *", school_names, key="ci_school")
+                ci_no      = st.text_input("계약번호", key="ci_no")
+                ci_start   = st.text_input("시작일 (YYYY-MM-DD)", "2026-03-01", key="ci_start")
+                ci_end     = st.text_input("종료일 (YYYY-MM-DD)", "2027-02-28", key="ci_end")
+            with ci2:
+                ci_waste   = st.text_input("폐기물 종류", "음식물류폐기물", key="ci_waste")
+                ci_unit    = st.number_input("단가(원/L)", value=150, step=10, key="ci_unit")
+                ci_vol     = st.number_input("월 예상량(L)", value=0.0, step=100.0, key="ci_vol")
+                ci_g2b     = st.text_input("나라장터 번호", key="ci_g2b")
+            ci_sta  = st.selectbox("계약상태", ["계약중","미계약","계약만료","협의중"], key="ci_sta")
+            ci_note = st.text_input("비고", key="ci_note")
+
+            if st.button("➕ 계약 등록", type="primary", use_container_width=True, key="ci_add"):
+                try:
+                    a_add_contract(
+                        학교명=ci_school, 계약번호=ci_no.strip(),
+                        시작일=ci_start.strip(), 종료일=ci_end.strip(),
+                        폐기물종류=ci_waste.strip(), 단가=int(ci_unit),
+                        월예상량=float(ci_vol), 상태=ci_sta,
+                        나라장터번호=ci_g2b.strip(), 비고=ci_note.strip()
+                    )
+                    st.success(f"✅ {ci_school} 계약 등록 완료")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 등록 오류: {e}")
+
+        if contracts:
+            with st.expander("🗑️ 계약 이력 삭제"):
+                del_id = st.number_input("삭제할 계약 ID", min_value=1, step=1, key="a_del_id")
+                if st.button("🗑️ 삭제", type="secondary", use_container_width=True, key="a_del_btn"):
+                    a_delete_contract(int(del_id))
+                    st.success(f"ID {del_id} 삭제 완료")
+                    st.rerun()
