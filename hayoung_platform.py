@@ -82,6 +82,80 @@ RECYCLE_ITEMS_DEFAULT = {
 # [추가3] 스쿨존 제한 시간대
 SCHOOLZONE_RESTRICTED = [(8, 9), (14, 16)]  # (시작시, 종료시)
 
+# ============================================================
+# 0-1. 사용자 계정 DB (로그인 시스템)
+# ============================================================
+# 비밀번호는 실제 운영 시 해시 처리 권장
+USER_ACCOUNTS = {
+    # ── 관리자 (1개) ──────────────────────────────────────────
+    "admin": {
+        "password": "hayoung2025!",
+        "role": "관리자",
+        "display_name": "하영자원 관리자",
+        "org": "하영자원(본사)",
+    },
+
+    # ── 교육청 (2개) ──────────────────────────────────────────
+    "hwaseong_edu": {
+        "password": "edu_hwaseong1",
+        "role": "교육청",
+        "display_name": "화성오산교육지원청 담당자",
+        "org": "화성오산교육지원청",
+    },
+    "seoulsouth_edu": {
+        "password": "edu_seoul2025",
+        "role": "교육청",
+        "display_name": "서울남부교육지원청 담당자",
+        "org": "서울남부교육지원청",
+    },
+
+    # ── 수거 기사 (3개) ───────────────────────────────────────
+    "driver_kim": {
+        "password": "driver_kim1",
+        "role": "수거기사",
+        "display_name": "김기사",
+        "org": "하영자원(본사 직영)",
+    },
+    "driver_lee": {
+        "password": "driver_lee2",
+        "role": "수거기사",
+        "display_name": "이기사",
+        "org": "하영자원(본사 직영)",
+    },
+    "driver_park": {
+        "password": "driver_park3",
+        "role": "수거기사",
+        "display_name": "박기사",
+        "org": "하영자원(본사 직영)",
+    },
+
+    # ── 학교 계정 (각 학교별 1개) ─────────────────────────────
+    "hwaseong_elem":      {"password": "school_0001", "role": "학교", "display_name": "화성초등학교 행정실", "org": "화성초등학교"},
+    "dongtanjunior":      {"password": "school_0002", "role": "학교", "display_name": "동탄중학교 행정실",   "org": "동탄중학교"},
+    "suwon_high":         {"password": "school_0003", "role": "학교", "display_name": "수원고등학교 행정실", "org": "수원고등학교"},
+    "anyang_elem":        {"password": "school_0004", "role": "학교", "display_name": "안양남초등학교 행정실","org": "안양남초등학교"},
+    "pyeongchon_elem":    {"password": "school_0005", "role": "학교", "display_name": "평촌초등학교 행정실", "org": "평촌초등학교"},
+    "burim_elem":         {"password": "school_0006", "role": "학교", "display_name": "부림초등학교 행정실", "org": "부림초등학교"},
+    "buheung_junior":     {"password": "school_0007", "role": "학교", "display_name": "부흥중학교 행정실",   "org": "부흥중학교"},
+    "deokcheon_elem":     {"password": "school_0008", "role": "학교", "display_name": "덕천초등학교 행정실", "org": "덕천초등학교"},
+    "seocho_high":        {"password": "school_0009", "role": "학교", "display_name": "서초고등학교 행정실", "org": "서초고등학교"},
+    "guam_high":          {"password": "school_0010", "role": "학교", "display_name": "구암고등학교 행정실", "org": "구암고등학교"},
+    "guksabong_junior":   {"password": "school_0011", "role": "학교", "display_name": "국사봉중학교 행정실", "org": "국사봉중학교"},
+    "danggok_high":       {"password": "school_0012", "role": "학교", "display_name": "당곡고등학교 행정실", "org": "당곡고등학교"},
+    "danggok_junior":     {"password": "school_0013", "role": "학교", "display_name": "당곡중학교 행정실",   "org": "당곡중학교"},
+    "seoul_industry":     {"password": "school_0014", "role": "학교", "display_name": "서울공업고등학교 행정실","org": "서울공업고등학교"},
+    "gangnam_junior":     {"password": "school_0015", "role": "학교", "display_name": "강남중학교 행정실",   "org": "강남중학교"},
+    "yeongnam_junior":    {"password": "school_0016", "role": "학교", "display_name": "영남중학교 행정실",   "org": "영남중학교"},
+    "seonyu_high":        {"password": "school_0017", "role": "학교", "display_name": "선유고등학교 행정실", "org": "선유고등학교"},
+    "sinmok_high":        {"password": "school_0018", "role": "학교", "display_name": "신목고등학교 행정실", "org": "신목고등학교"},
+    "gocheok_high":       {"password": "school_0019", "role": "학교", "display_name": "고척고등학교 행정실", "org": "고척고등학교"},
+    "guhyeon_high":       {"password": "school_0020", "role": "학교", "display_name": "구현고등학교 행정실", "org": "구현고등학교"},
+    "ansan_intl":         {"password": "school_0021", "role": "학교", "display_name": "안산국제비지니스고 행정실","org": "안산국제비지니스고등학교"},
+    "ansan_high":         {"password": "school_0022", "role": "학교", "display_name": "안산고등학교 행정실", "org": "안산고등학교"},
+    "songho_high":        {"password": "school_0023", "role": "학교", "display_name": "송호고등학교 행정실", "org": "송호고등학교"},
+    "bibong_high":        {"password": "school_0024", "role": "학교", "display_name": "비봉고등학교 행정실", "org": "비봉고등학교"},
+}
+
 # [추가5] 교육청 목록
 EDU_OFFICES = {
     "화성오산교육지원청": ["화성초등학교","부림초등학교","비봉고등학교","송호고등학교","안산고등학교","안산국제비지니스고등학교"],
@@ -126,6 +200,26 @@ st.markdown("""
 .cal-weekend         { color:#bbb; }
 .schoolzone-danger   { background:#d32f2f; color:white; padding:20px; border-radius:12px; text-align:center; font-size:24px; font-weight:900; margin-bottom:15px; }
 .schoolzone-safe     { background:#388e3c; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold; margin-bottom:15px; }
+
+/* ── 로그인 화면 ── */
+.login-bg { background:linear-gradient(160deg,#e8f4fd 0%,#d4eaf7 50%,#c2e0f4 100%); min-height:100vh; padding:40px 20px; }
+.login-header { text-align:center; margin-bottom:40px; }
+.login-header h1 { font-size:2.6rem; font-weight:900; color:#1a3a5c; margin:0; }
+.login-header p  { font-size:1.05rem; color:#4a6b8a; margin-top:8px; }
+.login-card-wrap { display:flex; gap:24px; justify-content:center; flex-wrap:wrap; margin-bottom:40px; }
+.login-card {
+    background:white; border-radius:16px; padding:36px 28px; width:260px;
+    box-shadow:0 6px 24px rgba(0,80,160,.12); cursor:pointer; transition:.2s;
+    text-align:center; border:3px solid transparent;
+}
+.login-card:hover { transform:translateY(-6px); box-shadow:0 12px 32px rgba(0,80,160,.2); border-color:#1a73e8; }
+.login-card.active { border-color:#1a73e8; background:#f0f7ff; }
+.login-card-icon { font-size:3.2rem; margin-bottom:16px; }
+.login-card-title { font-size:1.2rem; font-weight:800; color:#1a3a5c; margin-bottom:8px; }
+.login-card-desc  { font-size:0.85rem; color:#5f6368; line-height:1.5; }
+.login-form-box { background:white; border-radius:16px; max-width:440px; margin:0 auto; padding:36px; box-shadow:0 4px 20px rgba(0,0,0,.1); }
+.login-form-title { font-size:1.3rem; font-weight:800; color:#1a3a5c; margin-bottom:24px; text-align:center; }
+.login-footer { text-align:center; margin-top:40px; color:#8aa0b8; font-size:0.82rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -451,21 +545,143 @@ init_db()
 df_all = load_data()
 
 # ============================================================
-# 사이드바
+# 로그인 화면 렌더링 함수
+# ============================================================
+def render_login_page():
+    """S2B 스타일 랜딩 + 로그인 카드"""
+    # 선택된 그룹 state
+    if "login_group" not in st.session_state:
+        st.session_state.login_group = None
+
+    st.markdown("""
+    <div class="login-header">
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:10px;">
+            <span style="font-size:2.8rem;">♻️</span>
+            <div>
+                <div style="font-size:2rem;font-weight:900;color:#1a3a5c;line-height:1.1;">하영자원 데이터 플랫폼</div>
+                <div style="font-size:0.95rem;color:#4a6b8a;margin-top:4px;">투명하고 효율적인 공공 폐기물 관리 솔루션</div>
+            </div>
+        </div>
+        <div style="height:3px;width:80px;background:linear-gradient(90deg,#1a73e8,#34a853);border-radius:2px;margin:16px auto 0;"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── 3개 카드 버튼 ──
+    col_l, col_c, col_r = st.columns([1,3,1])
+    with col_c:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("""
+            <div class="login-card" style="border-top:5px solid #1a73e8;">
+                <div class="login-card-icon">🏢</div>
+                <div class="login-card-title">관리자</div>
+                <div class="login-card-desc">본사 통합 관제<br>전체 권한 접근</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("관리자 로그인", key="btn_admin", use_container_width=True, type="primary"):
+                st.session_state.login_group = "관리자"
+        with c2:
+            st.markdown("""
+            <div class="login-card" style="border-top:5px solid #34a853;">
+                <div class="login-card-icon">🏫</div>
+                <div class="login-card-title">교육청 / 학교</div>
+                <div class="login-card-desc">교육청·행정실<br>담당자 전용</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("교육청·학교 로그인", key="btn_school", use_container_width=True):
+                st.session_state.login_group = "학교_교육청"
+        with c3:
+            st.markdown("""
+            <div class="login-card" style="border-top:5px solid #fbbc05;">
+                <div class="login-card-icon">🚚</div>
+                <div class="login-card-title">수거업체</div>
+                <div class="login-card-desc">기사·현장 관리자<br>전용 앱</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("수거업체 로그인", key="btn_driver", use_container_width=True):
+                st.session_state.login_group = "수거기사"
+
+    # ── 로그인 폼 ──
+    if st.session_state.login_group:
+        st.write("")
+        col_fl, col_fc, col_fr = st.columns([1,2,1])
+        with col_fc:
+            group = st.session_state.login_group
+            icons = {"관리자": "🏢", "학교_교육청": "🏫", "수거기사": "🚚"}
+            titles = {"관리자": "관리자 로그인", "학교_교육청": "교육청 / 학교(행정실) 로그인", "수거기사": "수거업체(기사) 로그인"}
+            st.markdown(f"""
+            <div style="background:white;border-radius:16px;padding:36px;box-shadow:0 4px 20px rgba(0,0,0,.1);">
+                <div style="text-align:center;font-size:1.3rem;font-weight:800;color:#1a3a5c;margin-bottom:24px;">
+                    {icons[group]} {titles[group]}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            with st.form(f"login_form_{group}"):
+                uid = st.text_input("아이디", placeholder="아이디를 입력하세요")
+                pwd = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
+                submitted = st.form_submit_button("🔐 로그인", use_container_width=True, type="primary")
+                if submitted:
+                    if uid in USER_ACCOUNTS:
+                        acc = USER_ACCOUNTS[uid]
+                        if acc["password"] == pwd:
+                            st.session_state.logged_in = True
+                            st.session_state.user_id   = uid
+                            st.session_state.user_role = acc["role"]
+                            st.session_state.user_name = acc["display_name"]
+                            st.session_state.user_org  = acc["org"]
+                            st.rerun()
+                        else:
+                            st.error("❌ 비밀번호가 올바르지 않습니다.")
+                    else:
+                        st.error("❌ 존재하지 않는 아이디입니다.")
+
+    st.markdown("""
+    <div class="login-footer" style="margin-top:40px;">
+        ⓒ 2025 하영자원 | 하영자원 데이터 플랫폼 Pro v3.0 | 문의: 하영자원 본사
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ============================================================
+# 세션 상태 초기화
+# ============================================================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+# ── 미로그인 → 로그인 화면 표시 후 중단 ──
+if not st.session_state.logged_in:
+    render_login_page()
+    st.stop()
+
+# ============================================================
+# 사이드바 (로그인 후)
 # ============================================================
 with st.sidebar:
     st.markdown("## ♻️ 하영자원 Pro v3")
     st.caption("공공기관(B2G) 맞춤 데이터 플랫폼")
     st.write("---")
-    role = st.radio("사용자 환경(모드) 선택", [
-        "🏢 관리자 (본사 관제)",
-        "🏫 학교 담당자 (행정실)",
-        "🚚 수거 기사 (현장 앱)",
-        "🏛️ 교육청 관제 (신규)",   # [추가5]
-    ])
+    st.markdown(f"""
+    **👤 {st.session_state.user_name}**
+    🏷️ 역할: `{st.session_state.user_role}`
+    🏢 소속: {st.session_state.user_org}
+    """)
+    st.write("---")
+    if st.button("🚪 로그아웃", use_container_width=True, type="secondary"):
+        for k in ["logged_in","user_id","user_role","user_name","user_org","login_group"]:
+            st.session_state.pop(k, None)
+        st.rerun()
     st.write("---")
     st.success("✅ SQLite DB (WAL모드)")
     st.caption("v3: 재활용시세·스쿨존·캘린더·교육청모드")
+
+# ── 로그인 정보 기반 role 매핑 ──
+_role_map = {
+    "관리자":   "🏢 관리자 (본사 관제)",
+    "학교":     "🏫 학교 담당자 (행정실)",
+    "수거기사": "🚚 수거 기사 (현장 앱)",
+    "교육청":   "🏛️ 교육청 관제 (신규)",
+}
+role = _role_map.get(st.session_state.user_role, "🏢 관리자 (본사 관제)")
 
 # ============================================================
 # [모드 1] 관리자 (본사 관제)
@@ -775,7 +991,8 @@ if role == "🏢 관리자 (본사 관제)":
 # ============================================================
 elif role == "🏫 학교 담당자 (행정실)":
     st.title("🏫 학교 폐기물 통합 대시보드")
-    school = st.selectbox("관리 대상 학교", SCHOOL_LIST)
+    # 로그인된 학교 자동 설정 (selectbox 제거)
+    school = st.session_state.user_org
     df_school = df_all[df_all["학교명"] == school]
 
     if not df_school.empty:
@@ -1144,8 +1361,13 @@ elif role == "🏛️ 교육청 관제 (신규)":
     st.title("🏛️ 교육청 통합 관제 대시보드")
     st.markdown("<p style='color:#5f6368;font-size:16px;'>관할 학교 전체의 폐기물 현황·ESG 성과·예산절감을 실시간으로 모니터링합니다.</p>", unsafe_allow_html=True)
 
-    # 교육청 선택
-    sel_edu = st.selectbox("교육지원청 선택", list(EDU_OFFICES.keys()))
+    # 로그인된 교육청 자동 설정 (selectbox 제거)
+    # 관리자가 교육청 모드로 접근하면 첫 번째 교육청을 기본값으로 사용
+    _login_org = st.session_state.user_org
+    if _login_org in EDU_OFFICES:
+        sel_edu = _login_org
+    else:
+        sel_edu = list(EDU_OFFICES.keys())[0]
     edu_schools = EDU_OFFICES[sel_edu]
     df_edu = df_all[df_all["학교명"].isin(edu_schools)]
 
