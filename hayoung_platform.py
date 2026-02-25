@@ -12,7 +12,6 @@ import streamlit.components.v1 as components
 # ==========================================
 # 0. 관리 대상 학교 목록 (가나다순 자동 정렬 적용)
 # ==========================================
-# 파이썬의 sorted() 함수를 사용하여 자동으로 가나다순으로 정렬(Sort)합니다.
 SCHOOL_LIST = sorted([
     "화성초등학교", "동탄중학교", "수원고등학교", "안양남초등학교", "평촌초등학교", 
     "부림초등학교", "부흥중학교", "덕천초등학교", "서초고등학교", "구암고등학교", 
@@ -27,7 +26,7 @@ SCHOOL_LIST = sorted([
 st.set_page_config(page_title="하영자원 B2G 플랫폼", page_icon="♻️", layout="wide", initial_sidebar_state="expanded")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
-# 화려하고 직관적인 하영자원 전용 CSS 디자인 팩 (기존 유지)
+# 화려하고 직관적인 하영자원 전용 CSS 디자인 팩
 st.markdown("""
     <style>
     .custom-card { background-color: #ffffff !important; color: #202124 !important; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; border-top: 5px solid #1a73e8; }
@@ -46,7 +45,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 데이터 영구 저장 및 실시간 연산 (기존 유지)
+# 2. 데이터 영구 저장 및 실시간 연산 (1월 예시 데이터 추가)
 # ==========================================
 DB_FILE = "hayoung_data.csv"
 
@@ -54,8 +53,17 @@ def load_data():
     try:
         return pd.read_csv(DB_FILE)
     except FileNotFoundError:
+        # 파일이 없을 때 (처음 실행할 때) 2026년 1월 예시 데이터를 자동으로 채워 넣습니다.
         cols = ["날짜", "학교명", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
-        return pd.DataFrame(columns=cols)
+        sample_data = [
+            {"날짜": "2026-01-05 10:30:15", "학교명": "화성초등학교", "수거업체": "하영자원(본사 직영)", "음식물(kg)": 120, "재활용(kg)": 45, "사업장(kg)": 10, "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": "정산완료"},
+            {"날짜": "2026-01-12 14:15:22", "학교명": "동탄중학교", "수거업체": "하영자원(본사 직영)", "음식물(kg)": 80, "재활용(kg)": 30, "사업장(kg)": 15, "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": "정산완료"},
+            {"날짜": "2026-01-20 09:45:10", "학교명": "수원고등학교", "수거업체": "하영자원(본사 직영)", "음식물(kg)": 150, "재활용(kg)": 60, "사업장(kg)": 25, "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": "정산완료"},
+            {"날짜": "2026-01-28 16:20:05", "학교명": "안양남초등학교", "수거업체": "하영자원(본사 직영)", "음식물(kg)": 90, "재활용(kg)": 20, "사업장(kg)": 5, "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": "정산대기"}
+        ]
+        df = pd.DataFrame(sample_data, columns=cols)
+        df.to_csv(DB_FILE, index=False) # 예시 데이터를 파일로 영구 저장합니다.
+        return df
 
 def save_data(new_row):
     df = load_data()
@@ -69,7 +77,6 @@ if not df_all.empty:
     df_all['사업장비용'] = df_all['사업장(kg)'] * df_all['사업장단가(원)']
     df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
-    # '년-월-일 시:분:초' 형식에서 앞 7자리('년-월')만 잘라내어 월별 통계를 냅니다.
     df_all['월별'] = df_all['날짜'].astype(str).str[:7] 
     df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
 else:
@@ -85,7 +92,7 @@ with st.sidebar:
     role = st.radio("접속 모드", ["🏢 관리자 (본사 관제)", "🏫 행정실 (학교 담당자)", "🚚 현장 기사 (모바일 앱)"])
 
 # ==========================================
-# 4. [모드 1] 관리자 화면 (기존 디자인 유지)
+# 4. [모드 1] 관리자 화면
 # ==========================================
 if role == "🏢 관리자 (본사 관제)":
     st.title("🏢 본사 통합 관제 및 정산 센터")
@@ -113,11 +120,10 @@ if role == "🏢 관리자 (본사 관제)":
         st.error("🔔 'B자원' 업체와의 위탁 계약 만료가 30일 남았습니다.")
 
 # ==========================================
-# 5. [모드 2] 학교 행정실 (기존 유지 + 학교목록 연동)
+# 5. [모드 2] 학교 행정실
 # ==========================================
 elif role == "🏫 행정실 (학교 담당자)":
     st.title("🏫 학교 폐기물 통합 대시보드")
-    # 정렬된 학교 목록(SCHOOL_LIST)을 적용합니다.
     school = st.selectbox("관리 대상 학교", SCHOOL_LIST)
     df_school = df_all[df_all['학교명'] == school]
 
@@ -163,7 +169,7 @@ elif role == "🏫 행정실 (학교 담당자)":
         st.info("해당 학교의 수거 데이터가 아직 전송되지 않았습니다.")
 
 # ==========================================
-# 6. [모드 3] 수거 기사 (정밀 시간 + 카메라 연동 + 정렬)
+# 6. [모드 3] 수거 기사
 # ==========================================
 elif role == "🚚 현장 기사 (모바일 앱)":
     _, mid, _ = st.columns([1, 2, 1])
@@ -184,11 +190,9 @@ elif role == "🚚 현장 기사 (모바일 앱)":
 
         st.write("---")
         
-        # [핵심 추가] 모바일 접속 시 스마트폰 카메라가 활성화됩니다.
         st.camera_input("📸 현장 증빙 사진 촬영 (선택사항)")
         
         with st.form("driver_input"):
-            # 정렬된 학교 목록(SCHOOL_LIST)을 적용합니다.
             target = st.selectbox("수거 완료 학교", SCHOOL_LIST)
             col_in1, col_in2, col_in3 = st.columns(3)
             with col_in1: f_w = st.number_input("음식물(kg)", min_value=0, step=10)
@@ -198,7 +202,6 @@ elif role == "🚚 현장 기사 (모바일 앱)":
             if st.form_submit_button("본사 서버로 전송 🚀", use_container_width=True):
                 if f_w + b_w + r_w > 0:
                     new_data = {
-                        # [핵심 수정] 년-월-일 뒤에 '시:분:초' (초정밀 시간) 추가
                         "날짜": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "학교명": target, "수거업체": "하영자원(본사 직영)",
                         "음식물(kg)": f_w, "재활용(kg)": r_w, "사업장(kg)": b_w,
