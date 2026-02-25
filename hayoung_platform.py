@@ -48,23 +48,25 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 데이터 영구 저장 및 실시간 연산 (기존 V5 유지 + 연도별 데이터 추가)
+# 2. 데이터 영구 저장 및 실시간 연산 (자동 감지 및 생성 로직 추가)
 # ==========================================
 DB_FILE = "hayoung_data_v5.csv"
 
 def load_data():
+    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
     try:
-        return pd.read_csv(DB_FILE)
-    except FileNotFoundError:
-        cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
+        df = pd.read_csv(DB_FILE)
+        # 파일은 있지만 과거 연도(2024년) 데이터가 없는 경우, 에러를 발생시켜 아래 except 구문으로 넘김
+        if not df['날짜'].str.contains('2024').any():
+            raise ValueError("과거 연도 데이터가 없어 새로 생성합니다.")
+        return df
+    except:
+        # 파일이 아예 없거나, 과거 데이터가 없는 경우 2024~2026년 데이터를 자동으로 새로 만듦
         sample_data = []
-        
-        # 2024년, 2025년, 2026년 임의 데이터 생성
         for year in [2024, 2025, 2026]:
-            # 너무 데이터가 많아지는 것을 방지하기 위해 2024, 2025년은 일부 달력만 생성
             months_to_gen = [(11, 30), (12, 31)] if year != 2026 else [(1, 31), (2, 25)]
             for month, days in months_to_gen:
-                for day in range(1, days + 1, 3): # 3일 간격 생성
+                for day in range(1, days + 1, 3): 
                     if day % 7 in [0, 1]: continue 
                     for school, count in STUDENT_COUNTS.items():
                         food = int(count * random.uniform(0.1, 0.2))
@@ -79,7 +81,7 @@ def load_data():
                             "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": status
                         })
         df = pd.DataFrame(sample_data, columns=cols)
-        df.to_csv(DB_FILE, index=False)
+        df.to_csv(DB_FILE, index=False) # 새로 만든 데이터를 파일에 덮어쓰기 저장
         return df
 
 def save_data(new_row):
@@ -95,7 +97,7 @@ if not df_all.empty:
     df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].astype(str).str[:7]
-    df_all['년도'] = df_all['날짜'].astype(str).str[:4] # 연도별 구분을 위해 추가
+    df_all['년도'] = df_all['날짜'].astype(str).str[:4] 
     df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
 else:
     cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "년도", "탄소감축량(kg)"]
@@ -289,7 +291,6 @@ elif role == "🏫 학교 담당자 (행정실)":
                 st.markdown("<h5 style='text-align:center; color:#34a853; font-weight:bold;'>♻️ 재활용 수거량</h5>", unsafe_allow_html=True)
                 st.bar_chart(daily_grouped.set_index('일자')['재활용(kg)'], color="#34a853")
 
-        # 1. 월별 배출량 그래프 수정 (연도별 탭 추가 및 품목별 분리)
         with tab_monthly:
             st.write("연도별 및 월별 전체 수거량 추이입니다. (단위: kg)")
             years = sorted(df_school['년도'].unique(), reverse=True)
@@ -317,7 +318,6 @@ elif role == "🏫 학교 담당자 (행정실)":
 
         st.write("---")
         
-        # 2. 행정 증빙 서류 하위 탭 분리 및 품목별 다운로드 추가
         st.subheader("🖨️ 행정 증빙 서류 자동 출력 (관공서 법정 양식 적용)")
         st.write("아래 메뉴(Tab)를 클릭하여 필요한 서류를 품목별로 다운로드하세요.")
         
