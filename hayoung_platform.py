@@ -17,16 +17,11 @@ import os
 import random
 import requests
 from datetime import datetime
-from dotenv import load_dotenv
-
-# ==========================================
-# [개선2] 환경변수 로드 - 비밀번호/API키 .env 파일에서 관리
-# ==========================================
-# 프로젝트 폴더에 .env 파일을 만들고 아래 내용을 입력하세요:
-#   EXCEL_PASSWORD=원하는비밀번호
-#   KAKAO_API_KEY=카카오API키
-#   KAKAO_SENDER_KEY=카카오발신키
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv 미설치 시 os.environ에서 직접 읽음 (Streamlit Cloud Secrets 등)
 _raw_pw        = os.getenv("EXCEL_PASSWORD", "")
 EXCEL_PASSWORD = _raw_pw if _raw_pw else None  # .env 미설정 시 보호 비활성화 (경고 표시)
 KAKAO_API_KEY    = os.getenv("KAKAO_API_KEY",    "")
