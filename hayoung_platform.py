@@ -10,12 +10,24 @@ from datetime import datetime
 import streamlit.components.v1 as components
 
 # ==========================================
+# 0. 관리 대상 학교 목록 (가나다순 자동 정렬 적용)
+# ==========================================
+# 파이썬의 sorted() 함수를 사용하여 자동으로 가나다순으로 정렬(Sort)합니다.
+SCHOOL_LIST = sorted([
+    "화성초등학교", "동탄중학교", "수원고등학교", "안양남초등학교", "평촌초등학교", 
+    "부림초등학교", "부흥중학교", "덕천초등학교", "서초고등학교", "구암고등학교", 
+    "국사봉중학교", "당곡고등학교", "당곡중학교", "서울공업고등학교", "강남중학교", 
+    "영남중학교", "선유고등학교", "신목고등학교", "고척고등학교", "구현고등학교", 
+    "안산국제비지니스고등학교", "안산고등학교", "송호고등학교", "비봉고등학교"
+])
+
+# ==========================================
 # 1. 페이지 및 기본 환경 설정
 # ==========================================
 st.set_page_config(page_title="하영자원 B2G 플랫폼", page_icon="♻️", layout="wide", initial_sidebar_state="expanded")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
-# 화려하고 직관적인 하영자원 전용 CSS 디자인 팩
+# 화려하고 직관적인 하영자원 전용 CSS 디자인 팩 (기존 유지)
 st.markdown("""
     <style>
     .custom-card { background-color: #ffffff !important; color: #202124 !important; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; border-top: 5px solid #1a73e8; }
@@ -34,7 +46,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 기술적 실체 1 & 3: 데이터 영구 저장 및 실시간 연산
+# 2. 데이터 영구 저장 및 실시간 연산 (기존 유지)
 # ==========================================
 DB_FILE = "hayoung_data.csv"
 
@@ -50,7 +62,6 @@ def save_data(new_row):
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     df.to_csv(DB_FILE, index=False)
 
-# 서버가 구동될 때마다 최신 파일을 읽어와서 실시간 계산 수행
 df_all = load_data()
 
 if not df_all.empty:
@@ -58,7 +69,8 @@ if not df_all.empty:
     df_all['사업장비용'] = df_all['사업장(kg)'] * df_all['사업장단가(원)']
     df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
-    df_all['월별'] = df_all['날짜'].str[:7]
+    # '년-월-일 시:분:초' 형식에서 앞 7자리('년-월')만 잘라내어 월별 통계를 냅니다.
+    df_all['월별'] = df_all['날짜'].astype(str).str[:7] 
     df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
 else:
     cols = ["날짜", "학교명", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "탄소감축량(kg)"]
@@ -69,16 +81,15 @@ else:
 # ==========================================
 with st.sidebar:
     st.markdown("## ♻️ 하영자원 Pro")
-    st.caption("화성시 공공기관 맞춤 데이터 플랫폼")
+    st.caption("공공기관 맞춤 데이터 플랫폼")
     role = st.radio("접속 모드", ["🏢 관리자 (본사 관제)", "🏫 행정실 (학교 담당자)", "🚚 현장 기사 (모바일 앱)"])
 
 # ==========================================
-# 4. [모드 1] 관리자 화면 (다중 탭 관제 복구)
+# 4. [모드 1] 관리자 화면 (기존 디자인 유지)
 # ==========================================
 if role == "🏢 관리자 (본사 관제)":
     st.title("🏢 본사 통합 관제 및 정산 센터")
     
-    # 상단 핵심 대시보드
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: st.markdown(f'<div class="custom-card custom-card-red"><div class="metric-title">🗑️ 음식물 누적</div><div class="metric-value-food">{df_all["음식물(kg)"].sum():,} kg</div></div>', unsafe_allow_html=True)
     with col2: st.markdown(f'<div class="custom-card custom-card-purple"><div class="metric-title">🗄️ 사업장 누적</div><div class="metric-value-biz">{df_all["사업장(kg)"].sum():,} kg</div></div>', unsafe_allow_html=True)
@@ -86,7 +97,6 @@ if role == "🏢 관리자 (본사 관제)":
     with col4: st.markdown(f'<div class="custom-card"><div class="metric-title">💰 총 청구 금액</div><div class="metric-value-total">{df_all["최종정산액"].sum():,} 원</div></div>', unsafe_allow_html=True)
     with col5: st.markdown(f'<div class="custom-card custom-card-orange"><div class="metric-title">🛡️ 안전 점검 완료율</div><div class="metric-value-total" style="color:#fbbc05;">100 %</div></div>', unsafe_allow_html=True)
 
-    # 6개 탭 구조 완벽 복구
     tab_total, tab_food, tab_biz, tab_recycle, tab_map, tab_sub = st.tabs(["통합 정산", "음식물 상세", "사업장 상세", "재활용 상세", "📍 실시간 관제", "🤝 외주 현황"])
     
     with tab_total:
@@ -103,27 +113,26 @@ if role == "🏢 관리자 (본사 관제)":
         st.error("🔔 'B자원' 업체와의 위탁 계약 만료가 30일 남았습니다.")
 
 # ==========================================
-# 5. [모드 2] 학교 행정실 (ESG 및 보안 서류 출력)
+# 5. [모드 2] 학교 행정실 (기존 유지 + 학교목록 연동)
 # ==========================================
 elif role == "🏫 행정실 (학교 담당자)":
     st.title("🏫 학교 폐기물 통합 대시보드")
-    school = st.selectbox("관리 대상 학교", ["화성초등학교", "동탄중학교", "수원고등학교"])
+    # 정렬된 학교 목록(SCHOOL_LIST)을 적용합니다.
+    school = st.selectbox("관리 대상 학교", SCHOOL_LIST)
     df_school = df_all[df_all['학교명'] == school]
 
     if not df_school.empty:
-        # 실시간 ESG 탄소 저감 로직
         total_co2 = df_school['탄소감축량(kg)'].sum()
         tree_count = int(total_co2 / 6.6)
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, #11998e, #38ef7d); padding: 20px; border-radius: 12px; color: white; margin-bottom: 20px;">
-            <h4 style="margin:0;">🌱 우리 학교 ESG 성과 (화성시 교육청 제출용)</h4>
+            <h4 style="margin:0;">🌱 우리 학교 ESG 성과 (교육청 제출용)</h4>
             <h2>누적 CO₂ 감축량: {total_co2:,.1f} kg (🌲 소나무 {tree_count}그루 식재 효과)</h2>
         </div>
         """, unsafe_allow_html=True)
 
         st.bar_chart(df_school.set_index('날짜')[['음식물(kg)', '재활용(kg)', '사업장(kg)']])
 
-        # 기술적 실체 2: 행정 서류 보안 출력 (Security)
         def convert_excel_secure(df):
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
@@ -144,24 +153,23 @@ elif role == "🏫 행정실 (학교 담당자)":
             )
         with col_doc2:
             st.download_button(
-                label="📄 화성시 조례 법정 실적 보고서 (Excel)",
+                label="📄 법정 실적 보고서 (Excel)",
                 data=convert_excel_secure(df_school),
                 file_name=f"{datetime.now().strftime('%Y%m')}_{school}_법정실적보고.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
     else:
-        st.info("수거 데이터가 아직 전송되지 않았습니다.")
+        st.info("해당 학교의 수거 데이터가 아직 전송되지 않았습니다.")
 
 # ==========================================
-# 6. [모드 3] 수거 기사 (현장 실시간 입력)
+# 6. [모드 3] 수거 기사 (정밀 시간 + 카메라 연동 + 정렬)
 # ==========================================
 elif role == "🚚 현장 기사 (모바일 앱)":
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         st.markdown('<div class="mobile-app-header"><h2 style="margin:0;">🚚 하영자원 현장 앱</h2></div>', unsafe_allow_html=True)
         
-        # 현장 맞춤형 안전 로직
         with st.expander("📋 [필수] 운행 전 안전 점검 리스트", expanded=True):
             check1 = st.checkbox("차량 후방 카메라 작동 확인")
             check2 = st.checkbox("조수석 안전 요원 탑승 확인")
@@ -175,8 +183,13 @@ elif role == "🚚 현장 기사 (모바일 앱)":
             st.markdown("<h1 style='text-align:center; color:#d93025; font-size:50px;'>30</h1>", unsafe_allow_html=True)
 
         st.write("---")
+        
+        # [핵심 추가] 모바일 접속 시 스마트폰 카메라가 활성화됩니다.
+        st.camera_input("📸 현장 증빙 사진 촬영 (선택사항)")
+        
         with st.form("driver_input"):
-            target = st.selectbox("수거 완료 학교", ["화성초등학교", "동탄중학교", "수원고등학교"])
+            # 정렬된 학교 목록(SCHOOL_LIST)을 적용합니다.
+            target = st.selectbox("수거 완료 학교", SCHOOL_LIST)
             col_in1, col_in2, col_in3 = st.columns(3)
             with col_in1: f_w = st.number_input("음식물(kg)", min_value=0, step=10)
             with col_in2: b_w = st.number_input("사업장(kg)", min_value=0, step=10)
@@ -185,13 +198,14 @@ elif role == "🚚 현장 기사 (모바일 앱)":
             if st.form_submit_button("본사 서버로 전송 🚀", use_container_width=True):
                 if f_w + b_w + r_w > 0:
                     new_data = {
-                        "날짜": datetime.now().strftime("%Y-%m-%d"),
+                        # [핵심 수정] 년-월-일 뒤에 '시:분:초' (초정밀 시간) 추가
+                        "날짜": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "학교명": target, "수거업체": "하영자원(본사 직영)",
                         "음식물(kg)": f_w, "재활용(kg)": r_w, "사업장(kg)": b_w,
                         "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": "대기"
                     }
                     save_data(new_data)
-                    st.success(f"✅ {target} 수거 실적이 시스템에 영구 기록되었습니다.")
+                    st.success(f"✅ {target} 수거 실적이 초단위 시간과 함께 기록되었습니다.")
                     time.sleep(1)
                     st.rerun()
                 else:
