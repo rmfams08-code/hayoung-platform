@@ -299,6 +299,11 @@ def init_db():
         "계약_종료일":     "TEXT DEFAULT ''",
         "계약_상태":       "TEXT DEFAULT '미계약'",
         "비고":            "TEXT DEFAULT ''",
+        # [6단계] 부담당자 + 워크플로우 컬럼
+        "담당자2명":       "TEXT DEFAULT ''",
+        "담당자2연락처":   "TEXT DEFAULT ''",
+        "행정실팩스":      "TEXT DEFAULT ''",
+        "계약_사인_여부":  "INTEGER DEFAULT 0",
     }
     _existing = [row[1] for row in c.execute("PRAGMA table_info(school_prices)").fetchall()]
     for col, coldef in _sp_new_cols.items():
@@ -401,6 +406,36 @@ def init_db():
              datetime.now().strftime("%Y-%m-%d"),
              datetime.now().strftime("%Y-%m-%d"))
         )
+
+    # ── [5단계] contract_master 전자문서 컬럼 마이그레이션 ────
+    _cm_new_cols = {
+        "전자문서번호":  "TEXT DEFAULT ''",
+        "송신자ID":      "TEXT DEFAULT ''",
+        "수신일자":      "TEXT DEFAULT ''",
+        "계약서_상태":   "TEXT DEFAULT '미수신'",
+        # [6단계] 계약 체결 워크플로우 5단계
+        "단계1_완료":    "INTEGER DEFAULT 0",   # 견적서 발송
+        "단계2_완료":    "INTEGER DEFAULT 0",   # 위수탁계약서 발송
+        "단계3_완료":    "INTEGER DEFAULT 0",   # 서류 제출 완료
+        "단계4_완료":    "INTEGER DEFAULT 0",   # 나라장터 전자계약
+        "단계5_완료":    "INTEGER DEFAULT 0",   # 계약 완료
+    }
+    _cm_existing = [r[1] for r in c.execute("PRAGMA table_info(contract_master)").fetchall()]
+    for col, coldef in _cm_new_cols.items():
+        if col not in _cm_existing:
+            c.execute(f"ALTER TABLE contract_master ADD COLUMN {col} {coldef}")
+
+    # 서초고 전자문서 예시 데이터 업데이트
+    c.execute(
+        """UPDATE contract_master SET
+           전자문서번호=?, 송신자ID=?, 수신일자=?, 계약서_상태=?, updated_at=?
+           WHERE 학교명='서초고등학교' AND 전자문서번호=''""",
+        ("019c93cb-58c9-7b21-981f-a64746d74cbc",
+         "A311030206000",
+         "2026-02-20",
+         "서명완료",
+         datetime.now().strftime("%Y-%m-%d"))
+    )
     # 서초고등학교 school_prices 마스터 정보 업데이트
     c.execute(
         """UPDATE school_prices SET
@@ -409,6 +444,74 @@ def init_db():
            WHERE 학교명='서초고등학교'""",
         ("210-83-00086", "서울특별시 서초구 반포대로27길 29", "02-580-3891",
          "2026-03-01", "2027-02-28", "계약중",
+         datetime.now().strftime("%Y-%m-%d"))
+    )
+
+    # ── [1단계] 학교주소록.xlsx 데이터 일괄 반영 ──────────────
+    # 기존 학교: 사업자번호 + 주소 + 이메일(담당자이메일) UPDATE
+    _school_addr_data = [
+        # (학교명, 사업자번호, 주소, 이메일)
+        ("송호고등학교",             "134-83-02191", "경기도 안산시 상록구 광덕3로296",                       "songho296@korea.kr"),
+        ("안산고등학교",             "134-82-02947", "경기도 안산시 상록구 청룡4길8",                         "syphilip@korea.kr"),
+        ("당곡중학교",               "112-83-01076", "서울특별시 관악구 봉천로 13길 101",                     "danggokms@sen.go.kr"),
+        ("부림초등학교",             "138-83-01160", "경기도 안양시 동안구 달안로161-0 (관양동)",             "yaburim@korea.kr"),
+        ("덕천초등학교",             "123-83-01912", "경기도 안양시 만안구 전파로27-0 (안양동)",              "duck0886@korea.kr"),
+        ("당곡고등학교",             "112-83-01192", "서울특별시 관악구 봉천로21길",                          "dkhs@sen.go.kr"),
+        ("안양남초등학교",           "138-83-00079", "경기도 안양시 동안구 흥안대로275-0 (호계동)",           "anam7815@korea.kr"),
+        ("구암고등학교",             "119-83-02872", "서울특별시 관악구 성현로 91",                           "guam@sen.go.kr"),
+        ("평촌초등학교",             "138-83-01200", "경기도 안양시 동안구 평촌대로180번길56-0 (평촌동)",     "e41175852@korea.kr"),
+        ("영남중학교",               "118-83-00279", "서울특별시 영등포구 대림로31나길 17",                   "yeongnam@sen.go.kr"),
+        ("국사봉중학교",             "108-83-30062", "서울특별시 동작구 양녕로20길 20,1층",                   "kuk3615@sen.go.kr"),
+        ("고척고등학교",             "113-83-00293", "서울특별시 구로구 중앙로151길 162",                     "gocheokhs@sen.go.kr"),
+        ("부흥중학교",               "138-83-00953", "경기도 안양시 동안구 달안로25-0 (비산동)",              "aybhms@korea.kr"),
+        ("비봉고등학교",             "124-82-13506", "경기도 화성시 비봉면 양노로109번길5-0",                 "hanwoorikrf@korea.kr"),
+        ("선유고등학교",             "107-83-02980", "서울특별시 영등포구 선유로 227",                        "y20690040@sen.go.kr"),
+        ("안산국제비지니스고등학교", "134-82-00217", "경기도 안산시 상록구 수인로1981-0 (장상동)",            "ansan6181@korea.kr"),
+        ("강남중학교",               "118-83-00041", "서울특별시 동작구 대방동 15길 29",                      "k8145637@sen.go.kr"),
+    ]
+    for 학교명, 사업자번호, 주소, 이메일 in _school_addr_data:
+        c.execute(
+            """UPDATE school_prices SET
+               학교_사업자번호=?, 학교_주소=?, 담당자이메일=?, updated_at=?
+               WHERE 학교명=?""",
+            (사업자번호, 주소, 이메일,
+             datetime.now().strftime("%Y-%m-%d"), 학교명)
+        )
+
+    # 영양사 이메일 → 담당자이메일2 컬럼이 없으므로 비고에 기록
+    _nutrition_emails = [
+        ("당곡고등학교",             "영양사: choi_yejin00@naver.com"),
+        ("안양남초등학교",           "영양사: sangji35@korea.kr"),
+        ("덕천초등학교",             "영양사: hwlee123@korea.kr"),
+        ("영남중학교",               "영양사: chattingme@sen.go.kr"),
+        ("고척고등학교",             "영양사: hee9528@sen.go.kr"),
+        ("서초고등학교",             "영양사: dbsghk508@sen.go.kr"),
+        ("평촌초등학교",             "영양사: himiok16@korea.kr"),
+        ("구암고등학교",             "영양사: bravomss@sen.go.kr"),
+        ("강남중학교",               "영양사: alsemffp82@sen.go.kr"),
+        ("국사봉중학교",             "영양사: intj74@sen.go.kr"),
+        ("송호고등학교",             "영양사: dbswjdgus555@korea.kr"),
+        ("선유고등학교",             "영양사: yumyum00@sen.go.kr"),
+        ("부흥중학교",               "영양사: sarang0907@korea.kr"),
+        ("부림초등학교",             "영양사: ht5362@korea.kr"),
+        ("안산국제비지니스고등학교", "영양사: jaeokh@korea.kr"),
+    ]
+    for 학교명, 영양사메모 in _nutrition_emails:
+        c.execute(
+            """UPDATE school_prices SET 비고=?, updated_at=?
+               WHERE 학교명=? AND (비고='' OR 비고 IS NULL)""",
+            (영양사메모, datetime.now().strftime("%Y-%m-%d"), 학교명)
+        )
+
+    # ★ 신규 학교: 대길초등학교 (학교주소록에서 신규 발견)
+    c.execute(
+        """INSERT OR IGNORE INTO school_prices
+           (학교명, 교육청, 음식물단가, 학교_사업자번호,
+            학교_주소, 담당자이메일, 계약_상태, 비고, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("대길초등학교", "서울남부교육지원청", 150,
+         "118-83-00304", "서울특별시 영등포구 대방천로 206",
+         "eorlfch@sen.go.kr", "미계약", "학교주소록 신규 등록",
          datetime.now().strftime("%Y-%m-%d"))
     )
 
@@ -756,7 +859,8 @@ def a_get_all_schools() -> list[dict]:
     rows  = conn.execute(
         """SELECT 학교명, 음식물단가, 교육청,
                   학교_사업자번호, 학교_주소, 학교_전화,
-                  계약_시작일, 계약_종료일, 계약_상태, 비고, updated_at
+                  계약_시작일, 계약_종료일, 계약_상태, 비고, updated_at,
+                  담당자명, 담당자연락처, 담당자이메일
            FROM school_prices ORDER BY 교육청, 학교명"""
     ).fetchall()
     result = []
@@ -788,6 +892,9 @@ def a_get_all_schools() -> list[dict]:
             "비고":         r[9] or "",
             "수정일":       r[10] or "",
             "계약D-day":   contract_dday,
+            "담당자명":     r[11] or "",
+            "담당자연락처": r[12] or "",
+            "담당자이메일": r[13] or "",
         })
     return result
 
@@ -885,6 +992,303 @@ def a_delete_contract(contract_id: int):
     conn = get_conn()
     conn.execute("DELETE FROM contract_master WHERE id=?", (contract_id,))
     conn.commit()
+
+
+# ── [5단계] 나라장터 계약번호 파서 + 전자문서 헬퍼 ───────────
+
+def parse_g2b_contract_no(contract_no: str) -> dict:
+    """
+    나라장터 계약번호 파싱
+    예시: R26TA01543339 00
+    """
+    s = contract_no.strip().replace(" ", "")
+    if len(s) < 12:
+        return {"원본": contract_no, "오류": "형식 불일치 (최소 12자)"}
+
+    type_map  = {"R": "용역", "S": "물품", "C": "공사", "G": "기타"}
+    order_map = {"00": "원계약"}
+
+    contract_type = type_map.get(s[0], f"기타({s[0]})")
+    year          = "20" + s[1:3]
+    org_code      = s[3:5]
+    serial        = s[5:13]
+    order_code    = s[13:15] if len(s) >= 15 else "00"
+    order_label   = order_map.get(order_code, f"{int(order_code)}차 변경계약")
+    is_change     = order_code != "00"
+
+    return {
+        "원본":         contract_no,
+        "계약유형":     contract_type,
+        "계약연도":     year,
+        "기관코드":     org_code,
+        "일련번호":     serial,
+        "차수코드":     order_code,
+        "차수":         order_label,
+        "변경계약여부": is_change,
+    }
+
+
+def g2b_update_edoc(contract_id: int, edoc_no: str, sender_id: str,
+                    recv_date: str, edoc_status: str):
+    """전자문서 정보 업데이트"""
+    conn = get_conn()
+    conn.execute(
+        """UPDATE contract_master SET
+           전자문서번호=?, 송신자ID=?, 수신일자=?, 계약서_상태=?, updated_at=?
+           WHERE id=?""",
+        (edoc_no, sender_id, recv_date, edoc_status,
+         datetime.now().strftime("%Y-%m-%d"), contract_id)
+    )
+    # 서명완료 시 school_prices 계약상태 → 계약중 자동 변경
+    if edoc_status == "서명완료":
+        row = conn.execute(
+            "SELECT 학교명, 계약_시작일, 계약_종료일 FROM contract_master WHERE id=?",
+            (contract_id,)
+        ).fetchone()
+        if row:
+            conn.execute(
+                """UPDATE school_prices SET 계약_상태=?, updated_at=?
+                   WHERE 학교명=?""",
+                ("계약중", datetime.now().strftime("%Y-%m-%d"), row[0])
+            )
+    conn.commit()
+
+
+def g2b_get_edoc_list() -> list[dict]:
+    """전자문서 수신 현황 전체 조회"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT id, 학교명, 나라장터_번호, 전자문서번호,
+                  송신자ID, 수신일자, 계약서_상태, 계약_시작일, 계약_종료일
+           FROM contract_master
+           ORDER BY 수신일자 DESC, id DESC"""
+    ).fetchall()
+    cols = ["id","학교명","나라장터_번호","전자문서번호",
+            "송신자ID","수신일자","계약서_상태","계약_시작일","계약_종료일"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+# ── [6단계] 담당자 고도화 + 워크플로우 헬퍼 ────────────────────
+
+def a_update_contacts(학교명: str, 담당자2명: str, 담당자2연락처: str,
+                      행정실팩스: str, 계약_사인_여부: bool):
+    """부담당자 + 팩스 + 사인여부 업데이트"""
+    conn = get_conn()
+    conn.execute(
+        """UPDATE school_prices SET
+           담당자2명=?, 담당자2연락처=?, 행정실팩스=?,
+           계약_사인_여부=?, updated_at=?
+           WHERE 학교명=?""",
+        (담당자2명, 담당자2연락처, 행정실팩스,
+         int(계약_사인_여부), datetime.now().strftime("%Y-%m-%d"), 학교명)
+    )
+    conn.commit()
+
+
+def wf_get_steps(contract_id: int) -> dict:
+    """계약 체결 워크플로우 5단계 현황 조회
+    외부 스크립트·코워크 자동화에서 단계별 상태를 딕셔너리로 조회할 때 사용.
+    UI에서는 직접 SQL 조회 방식을 사용함.
+    """
+    conn = get_conn()
+    row  = conn.execute(
+        """SELECT 단계1_완료, 단계2_완료, 단계3_완료,
+                  단계4_완료, 단계5_완료, 학교명, 계약_상태
+           FROM contract_master WHERE id=?""",
+        (contract_id,)
+    ).fetchone()
+    if not row:
+        return {}
+    return {
+        "steps":     [bool(row[i]) for i in range(5)],
+        "학교명":    row[5],
+        "계약_상태": row[6],
+        "완료수":    sum(bool(row[i]) for i in range(5)),
+    }
+
+
+def wf_toggle_step(contract_id: int, step: int):
+    """워크플로우 단계 토글 (step: 1~5)"""
+    col  = f"단계{step}_완료"
+    conn = get_conn()
+    conn.execute(
+        f"UPDATE contract_master SET {col} = CASE WHEN {col}=1 THEN 0 ELSE 1 END,"
+        f" updated_at=? WHERE id=?",
+        (datetime.now().strftime("%Y-%m-%d"), contract_id)
+    )
+    # 5단계 모두 완료 시 계약_상태 자동 → 계약중
+    steps = conn.execute(
+        "SELECT 단계1_완료,단계2_완료,단계3_완료,단계4_완료,단계5_완료,학교명 "
+        "FROM contract_master WHERE id=?", (contract_id,)
+    ).fetchone()
+    if steps and all(steps[:5]):
+        conn.execute(
+            "UPDATE contract_master SET 계약_상태='계약중', updated_at=? WHERE id=?",
+            (datetime.now().strftime("%Y-%m-%d"), contract_id)
+        )
+        conn.execute(
+            "UPDATE school_prices SET 계약_상태='계약중', updated_at=? WHERE 학교명=?",
+            (datetime.now().strftime("%Y-%m-%d"), steps[5])
+        )
+    conn.commit()
+
+
+def get_all_contact_csv() -> bytes:
+    """전체 담당자 명부 CSV 생성"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT 학교명, 교육청, 담당자명, 담당자연락처, 담당자이메일,
+                  담당자2명, 담당자2연락처, 행정실팩스, 계약_종료일
+           FROM school_prices ORDER BY 교육청, 학교명"""
+    ).fetchall()
+    cols = ["학교명","교육청","주담당자명","주담당자연락처","주담당자이메일",
+            "부담당자명","부담당자연락처","행정실팩스","계약만료일"]
+    buf = io.StringIO()
+    import csv
+    writer = csv.writer(buf)
+    writer.writerow(cols)
+    writer.writerows(rows)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+# ── [섹션4] 월별 정산 자동 계산 헬퍼 ──────────────────────────
+
+def calc_monthly_settlement(year: int, month: int) -> dict:
+    """
+    학교별 월별 정산 자동 계산
+    반환: {학교명: {수거량_L, 단가, 정산금액, 세금구분, 수거건수}}
+    """
+    conn     = get_conn()
+    ym_str   = f"{year}-{month:02d}"   # ex) "2026-03"
+
+    # 해당 월 수거 데이터 조회 (음식물만)
+    rows = conn.execute(
+        """SELECT c.학교명,
+                  SUM(c.음식물_kg)  AS 수거량,
+                  COUNT(*)          AS 건수,
+                  p.음식물단가
+           FROM collections c
+           LEFT JOIN school_prices p ON c.학교명 = p.학교명
+           WHERE substr(c.날짜, 1, 7) = ?
+           GROUP BY c.학교명
+           ORDER BY c.학교명""",
+        (ym_str,)
+    ).fetchall()
+
+    result = {}
+    for 학교명, 수거량, 건수, 단가 in rows:
+        단가      = 단가 or 150          # 단가 미설정 시 기본값
+        수거량    = round(수거량 or 0, 1)
+        정산금액  = int(수거량 * 단가)
+        result[학교명] = {
+            "수거량_L":  수거량,
+            "단가":      단가,
+            "정산금액":  정산금액,
+            "세금구분":  "면세",          # 음식물폐기물 = 면세
+            "수거건수":  건수,
+        }
+    return result
+
+
+def create_settlement_excel(settlement: dict, year: int, month: int) -> bytes:
+    """
+    월별 정산표 엑셀 생성
+    반환: bytes (다운로드용)
+    """
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils  import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"{year}년{month:02d}월_정산"
+
+    # ── 스타일 정의 ──
+    hdr_fill  = PatternFill("solid", fgValue="1a73e8")
+    hdr_font  = Font(bold=True, color="FFFFFF", size=11)
+    tot_fill  = PatternFill("solid", fgValue="e8f0fe")
+    tot_font  = Font(bold=True, size=11)
+    thin      = Side(style="thin", color="CCCCCC")
+    border    = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center    = Alignment(horizontal="center", vertical="center")
+    right_a   = Alignment(horizontal="right",  vertical="center")
+
+    # ── 제목 ──
+    ws.merge_cells("A1:G1")
+    ws["A1"] = f"하영자원 {year}년 {month:02d}월 음식물 정산표"
+    ws["A1"].font      = Font(bold=True, size=14, color="1a3a5c")
+    ws["A1"].alignment = center
+    ws.row_dimensions[1].height = 30
+
+    ws["A2"] = f"작성일: {date.today().strftime('%Y년 %m월 %d일')}"
+    ws["A2"].font = Font(italic=True, color="888888", size=9)
+    ws["F2"] = "하영자원 / 대표 정석완"
+    ws["F2"].font = Font(bold=True, size=10)
+
+    # ── 헤더 행 ──
+    headers = ["No", "학교명", "수거건수", "수거량(L)", "단가(원/L)", "정산금액(원)", "세금구분"]
+    col_widths = [5, 22, 10, 12, 12, 16, 10]
+    for i, (h, w) in enumerate(zip(headers, col_widths), 1):
+        cell            = ws.cell(row=3, column=i, value=h)
+        cell.fill       = hdr_fill
+        cell.font       = hdr_font
+        cell.alignment  = center
+        cell.border     = border
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # ── 데이터 행 ──
+    total_vol  = 0.0
+    total_amt  = 0
+    total_cnt  = 0
+
+    for seq, (school, data) in enumerate(sorted(settlement.items()), 1):
+        row = seq + 3
+        vals = [
+            seq,
+            school,
+            data["수거건수"],
+            data["수거량_L"],
+            data["단가"],
+            data["정산금액"],
+            data["세금구분"],
+        ]
+        for col, val in enumerate(vals, 1):
+            cell           = ws.cell(row=row, column=col, value=val)
+            cell.border    = border
+            cell.alignment = right_a if col in (3,4,5,6) else center if col in (1,7) else cell.alignment
+        # 금액 숫자 서식
+        ws.cell(row=row, column=6).number_format = "#,##0"
+        ws.cell(row=row, column=4).number_format = "#,##0.0"
+
+        total_vol += data["수거량_L"]
+        total_amt += data["정산금액"]
+        total_cnt += data["수거건수"]
+
+    # ── 합계 행 ──
+    tot_row = len(settlement) + 4
+    ws.merge_cells(f"A{tot_row}:B{tot_row}")
+    ws[f"A{tot_row}"] = "합 계"
+    for col in range(1, 8):
+        cell        = ws.cell(row=tot_row, column=col)
+        cell.fill   = tot_fill
+        cell.font   = tot_font
+        cell.border = border
+        cell.alignment = center
+
+    ws.cell(row=tot_row, column=3, value=total_cnt).alignment = right_a
+    ws.cell(row=tot_row, column=4, value=round(total_vol, 1)).number_format = "#,##0.0"
+    ws.cell(row=tot_row, column=4).alignment = right_a
+    ws.cell(row=tot_row, column=6, value=total_amt).number_format = "#,##0"
+    ws.cell(row=tot_row, column=6).alignment = right_a
+
+    # ── 안내 ──
+    note_row = tot_row + 2
+    ws[f"A{note_row}"] = "※ 음식물류폐기물 수거운반은 부가가치세 면세 품목입니다."
+    ws[f"A{note_row}"].font = Font(italic=True, color="888888", size=9)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def _hy_font() -> str:
@@ -1699,6 +2103,57 @@ if role == "🏢 관리자 (본사 관제)":
     """, unsafe_allow_html=True)
 
     st.write("---")
+    # ── [7단계] 연간 계약 현황 요약 대시보드 ─────────────────
+    st.subheader("📊 연간 계약 현황 대시보드")
+
+    try:
+        _dash_schools = a_get_all_schools()
+        _dash_active  = [s for s in _dash_schools if s["계약상태"] == "계약중"]
+        _dash_none    = [s for s in _dash_schools if s["계약상태"] == "미계약"]
+        _dash_expire  = [s for s in _dash_schools
+                         if "⛔" in s["계약D-day"] or "🔴" in s["계약D-day"]]
+
+        # 연간 예상 총 매출 계산 (계약중 학교 단가 × 월예상량 × 12)
+        _dash_contracts = a_get_contracts()
+        _revenue_map    = {}
+        for c_ in _dash_contracts:
+            if c_["계약_상태"] == "계약중":
+                sn = c_["학교명"]
+                monthly = float(c_.get("월_예상량_L") or 0) * int(c_.get("단가") or 0)
+                if sn not in _revenue_map or _revenue_map[sn] < monthly:
+                    _revenue_map[sn] = monthly
+        _annual_revenue = sum(_revenue_map.values()) * 12
+
+        # 이번 달 정산 예정 (collections 기반)
+        _this_ym      = datetime.now().strftime("%Y-%m")
+        _month_settle = calc_monthly_settlement(datetime.now().year, datetime.now().month)
+        _month_total  = sum(v["정산금액"] for v in _month_settle.values())
+
+        # 올해 신규/갱신 계약 수
+        _this_year = str(datetime.now().year)
+        _new_cnt   = sum(1 for c_ in _dash_contracts
+                         if (c_.get("계약_시작일","") or "").startswith(_this_year))
+
+        # 4열 카드
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("🏫 계약중 학교",   f"{len(_dash_active)}개교",
+                  delta=f"미계약 {len(_dash_none)}개교", delta_color="off")
+        d2.metric("💰 연간 예상 매출",
+                  f"{int(_annual_revenue/10000):,}만원" if _annual_revenue else "데이터 없음")
+        d3.metric("📅 이번달 정산 예정",
+                  f"{_month_total:,}원" if _month_total else "수거 데이터 없음")
+        d4.metric("📝 올해 신규 계약",  f"{_new_cnt}건",
+                  delta=f"만료임박 {len(_dash_expire)}교", delta_color="inverse")
+
+        # 계약 만료 임박 경고 배너
+        if _dash_expire:
+            exp_names = ", ".join(s["학교명"] for s in _dash_expire[:5])
+            extra     = f" 외 {len(_dash_expire)-5}개교" if len(_dash_expire) > 5 else ""
+            st.warning(f"⏰ **계약 만료임박:** {exp_names}{extra} — 🏫 학교 마스터 관리에서 갱신하세요")
+    except Exception as _e:
+        st.info(f"대시보드 데이터 로드 중... ({_e})")
+
+    st.write("---")
     st.subheader("📑 통합 정산 관리")
 
     tab_total, tab_food, tab_biz, tab_recycle, tab_map, tab_sub, tab_price, tab_recycle_price, tab_notify = st.tabs([
@@ -1791,6 +2246,220 @@ if role == "🏢 관리자 (본사 관제)":
             )
             st.download_button(f"📥 이번달 정산서 다운로드", data=month_dl,
                                file_name=f"하영자원_월간정산서_{cur_month}.xlsx", use_container_width=True)
+
+        # ── [4단계] 월별 정산 자동 계산 ─────────────────────
+        st.divider()
+        st.subheader("📊 월별 학교별 정산 자동 계산")
+        st.caption("school_prices 단가 × collections 수거량 → 학교별 정산금액 자동 계산")
+
+        ms1, ms2 = st.columns(2)
+        with ms1:
+            ms_year  = st.selectbox("정산 연도", list(range(2025, date.today().year + 2)),
+                                    index=list(range(2025, date.today().year + 2)).index(date.today().year),
+                                    key="ms_year")
+        with ms2:
+            ms_month = st.selectbox("정산 월", list(range(1, 13)),
+                                    index=date.today().month - 1,
+                                    key="ms_month",
+                                    format_func=lambda m: f"{m:02d}월")
+
+        if st.button("🔢 정산 계산 실행", type="primary",
+                     use_container_width=True, key="ms_calc"):
+            with st.spinner("계산 중..."):
+                settlement = calc_monthly_settlement(int(ms_year), int(ms_month))
+                st.session_state["ms_result"]    = settlement
+                st.session_state["ms_year_sel"]  = int(ms_year)
+                st.session_state["ms_month_sel"] = int(ms_month)
+
+        ms_result = st.session_state.get("ms_result")
+        if ms_result:
+            ms_y = st.session_state.get("ms_year_sel", ms_year)
+            ms_m = st.session_state.get("ms_month_sel", ms_month)
+
+            if not ms_result:
+                st.info(f"⚠️ {ms_y}년 {ms_m:02d}월 수거 데이터가 없습니다.")
+            else:
+                # 합계
+                total_vol = sum(v["수거량_L"]  for v in ms_result.values())
+                total_amt = sum(v["정산금액"]  for v in ms_result.values())
+                total_cnt = sum(v["수거건수"]  for v in ms_result.values())
+
+                # 요약 카드
+                sc1, sc2, sc3 = st.columns(3)
+                sc1.metric("🏫 정산 학교 수",    f"{len(ms_result)}개교")
+                sc2.metric("🗑️ 총 수거량",       f"{total_vol:,.1f} L")
+                sc3.metric("💰 총 정산금액",      f"{total_amt:,} 원")
+
+                # 정산표
+                df_ms = pd.DataFrame([{
+                    "학교명":       s,
+                    "수거건수":     d["수거건수"],
+                    "수거량(L)":    d["수거량_L"],
+                    "단가(원/L)":   d["단가"],
+                    "정산금액(원)": d["정산금액"],
+                    "세금구분":     d["세금구분"],
+                } for s, d in ms_result.items()])
+
+                # 합계 행 추가
+                total_row = pd.DataFrame([{
+                    "학교명": "【 합 계 】",
+                    "수거건수": total_cnt,
+                    "수거량(L)": round(total_vol, 1),
+                    "단가(원/L)": "-",
+                    "정산금액(원)": total_amt,
+                    "세금구분": "면세",
+                }])
+                df_ms_show = pd.concat([df_ms, total_row], ignore_index=True)
+
+                st.dataframe(
+                    df_ms_show,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "수거량(L)":    st.column_config.NumberColumn(format="%.1f"),
+                        "정산금액(원)": st.column_config.NumberColumn(format="%d"),
+                        "단가(원/L)":   st.column_config.TextColumn(width="small"),
+                        "세금구분":     st.column_config.TextColumn(width="small"),
+                    }
+                )
+
+                # 엑셀 다운로드
+                try:
+                    excel_bytes = create_settlement_excel(ms_result, ms_y, ms_m)
+                    st.download_button(
+                        label     = f"📥 {ms_y}년 {ms_m:02d}월 정산표 엑셀 다운로드",
+                        data      = excel_bytes,
+                        file_name = f"하영자원_{ms_y}년{ms_m:02d}월_정산표.xlsx",
+                        mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key       = "ms_dl",
+                        use_container_width=True,
+                        type      = "primary",
+                    )
+                except Exception as e:
+                    st.warning(f"엑셀 생성 오류: {e}")
+                    st.info("openpyxl 설치 필요: pip install openpyxl")
+
+        # ── [7단계] 수익성 분석 차트 ──────────────────────────
+        st.divider()
+        st.subheader("📈 학교별 수익성 분석")
+
+        try:
+            # ① 학교별 연간 수거량 + 정산금액 집계
+            _ch_grp = (
+                df_all.groupby("학교명")
+                .agg(
+                    연간수거량=("음식물(kg)", "sum"),
+                    연간정산액=("최종정산액",  "sum"),
+                    수거건수  =("id",          "count"),
+                )
+                .reset_index()
+                .sort_values("연간정산액", ascending=False)
+            )
+            _ch_top = _ch_grp.head(10)
+
+            ch1, ch2 = st.columns(2)
+
+            with ch1:
+                st.markdown("**🏆 연간 정산금액 상위 10개교**")
+                if not _ch_top.empty:
+                    st.bar_chart(
+                        _ch_top.set_index("학교명")["연간정산액"],
+                        use_container_width=True,
+                        height=280,
+                        color="#1a73e8",
+                    )
+                    st.caption("단위: 원 (음식물 기준)")
+                else:
+                    st.info("수거 데이터 없음")
+
+            with ch2:
+                st.markdown("**🗑️ 연간 수거량 상위 10개교**")
+                if not _ch_top.empty:
+                    st.bar_chart(
+                        _ch_top.set_index("학교명")["연간수거량"],
+                        use_container_width=True,
+                        height=280,
+                        color="#34a853",
+                    )
+                    st.caption("단위: kg (= L)")
+                else:
+                    st.info("수거 데이터 없음")
+
+            # ② 단가 구간별 학교 분포
+            try:
+                _sp_data = get_conn().execute(
+                    "SELECT 학교명, 음식물단가 FROM school_prices ORDER BY 음식물단가"
+                ).fetchall()
+                if _sp_data:
+                    def _price_band(p):
+                        if p <= 100:   return "① 100원 이하"
+                        if p <= 150:   return "② 101~150원"
+                        if p <= 200:   return "③ 151~200원"
+                        return          "④ 201원 이상"
+
+                    _band_cnt = {}
+                    for _, p in _sp_data:
+                        b = _price_band(p or 150)
+                        _band_cnt[b] = _band_cnt.get(b, 0) + 1
+
+                    ch3, ch4 = st.columns(2)
+
+                    with ch3:
+                        st.markdown("**💴 단가 구간별 학교 분포**")
+                        _band_df = pd.DataFrame(
+                            list(_band_cnt.items()),
+                            columns=["단가 구간", "학교 수"]
+                        ).sort_values("단가 구간")
+                        st.bar_chart(
+                            _band_df.set_index("단가 구간")["학교 수"],
+                            use_container_width=True,
+                            height=250,
+                            color="#fbbc04",
+                        )
+                        # 구간별 학교 목록
+                        with st.expander("📋 구간별 학교 상세"):
+                            for b_name, b_count in sorted(_band_cnt.items()):
+                                schools_in = [nm for nm, p in _sp_data if _price_band(p or 150) == b_name]
+                                st.markdown(f"**{b_name}** ({b_count}개교): {', '.join(schools_in)}")
+
+                    with ch4:
+                        st.markdown("**📅 월별 전체 수거량 추이**")
+                        _monthly_vol = (
+                            df_all.groupby("월별")["음식물(kg)"]
+                            .sum()
+                            .reset_index()
+                            .sort_values("월별")
+                        )
+                        if not _monthly_vol.empty:
+                            st.line_chart(
+                                _monthly_vol.set_index("월별")["음식물(kg)"],
+                                use_container_width=True,
+                                height=250,
+                                color="#ea4335",
+                            )
+                            st.caption("단위: kg / 전체 학교 합산")
+                        else:
+                            st.info("월별 데이터 없음")
+            except Exception as _e2:
+                st.warning(f"단가/월별 차트 오류: {_e2}")
+
+            # ③ 수익성 요약 테이블
+            st.markdown("**📋 학교별 수익성 요약 테이블**")
+            if not _ch_grp.empty:
+                _ch_grp["평균단가(원/L)"] = (_ch_grp["연간정산액"] / _ch_grp["연간수거량"]).round(1)
+                _ch_grp["연간정산액(만원)"] = (_ch_grp["연간정산액"] / 10000).round(1)
+                st.dataframe(
+                    _ch_grp[["학교명","수거건수","연간수거량","평균단가(원/L)","연간정산액(만원)"]].reset_index(drop=True),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "연간수거량":       st.column_config.NumberColumn(format="%,.0f kg"),
+                        "연간정산액(만원)": st.column_config.NumberColumn(format="%.1f 만원"),
+                        "평균단가(원/L)":   st.column_config.NumberColumn(format="%.1f 원"),
+                    }
+                )
+        except Exception as _e:
+            st.warning(f"수익성 분석 오류: {_e}")
 
     with tab_food:
         f1, f2 = st.tabs([f"📅 이번달", "📅 전체"])
@@ -2635,6 +3304,122 @@ elif role == "📦 계약서류 패키지 생성":
         st.dataframe(df_hy, use_container_width=True, hide_index=True)
         st.caption("※ 위 정보는 모든 서류에 자동으로 입력됩니다.")
 
+    # ── [2단계] 계약중 학교 전체 일괄 생성 ───────────────────
+    st.divider()
+    st.subheader("🚀 계약중 학교 전체 패키지 일괄 생성")
+    st.caption("DB에서 계약상태 = '계약중' 학교를 자동 조회하여 일괄 생성합니다.")
+
+    # 계약중 학교 목록 미리보기
+    try:
+        active_schools = [s for s in a_get_all_schools() if s["계약상태"] == "계약중"]
+    except Exception:
+        active_schools = []
+
+    if not active_schools:
+        st.info("⚠️ 현재 계약상태가 '계약중'인 학교가 없습니다. 🏫 학교 마스터 관리에서 계약 상태를 먼저 설정해주세요.")
+    else:
+        with st.expander(f"📋 일괄 생성 대상 학교 ({len(active_schools)}개) 확인"):
+            df_active = pd.DataFrame([{
+                "학교명":    s["학교명"],
+                "단가(원/L)": s["음식물단가"],
+                "계약기간":  f"{s['계약시작']} ~ {s['계약종료']}",
+                "교육청":    s["교육청"],
+            } for s in active_schools])
+            st.dataframe(df_active, use_container_width=True, hide_index=True)
+
+        if st.button(
+            f"🚀 계약중 {len(active_schools)}개 학교 전체 패키지 일괄 생성",
+            type="primary", use_container_width=True, key="bulk_gen"
+        ):
+            master_buf  = io.BytesIO()
+            results     = []   # (학교명, 성공여부, 크기, 오류)
+            today_str   = date.today().strftime("%Y%m%d")
+
+            prog_bar  = st.progress(0, text="준비 중...")
+            status_ph = st.empty()
+
+            with zipfile.ZipFile(master_buf, "w", zipfile.ZIP_DEFLATED) as master_zip:
+                for idx, school in enumerate(active_schools):
+                    sname = school["학교명"]
+                    status_ph.info(f"⏳ [{idx+1}/{len(active_schools)}] {sname} 처리 중...")
+                    try:
+                        zip_bytes, errs = generate_contract_package(
+                            school_name     = sname,
+                            school_biz_no   = school.get("사업자번호", ""),
+                            school_addr     = school.get("주소", ""),
+                            school_tel      = school.get("전화", ""),
+                            start_date      = school.get("계약시작", "2026-03-01"),
+                            end_date        = school.get("계약종료", "2027-02-28"),
+                            volume_l        = float(school.get("월_예상량_L", 0) or 0),
+                            unit_price      = int(school.get("음식물단가", 150)),
+                            contract_amount = "",
+                        )
+                        arc_name = f"{sname}_{today_str}.zip"
+                        master_zip.writestr(arc_name, zip_bytes)
+                        results.append((sname, True, len(zip_bytes), errs))
+                    except Exception as e:
+                        results.append((sname, False, 0, {"오류": str(e)}))
+
+                # 전체 결과 요약 TXT
+                summary_lines = [
+                    f"하영자원 계약서류 일괄 생성 결과",
+                    f"생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    f"총 {len(active_schools)}개 학교",
+                    "=" * 50,
+                ]
+                for sname, ok, sz, errs in results:
+                    status_icon = "✅" if ok else "❌"
+                    sz_str      = f"{sz/1024:.1f}KB" if ok else "실패"
+                    err_str     = f" ({list(errs.keys())})" if errs else ""
+                    summary_lines.append(f"{status_icon} {sname} — {sz_str}{err_str}")
+
+                ok_cnt   = sum(1 for _, ok, _, _ in results if ok)
+                fail_cnt = len(results) - ok_cnt
+                summary_lines += ["=" * 50,
+                    f"성공: {ok_cnt}개  실패: {fail_cnt}개"]
+                master_zip.writestr("00_일괄생성결과.txt",
+                                    "\n".join(summary_lines))
+
+            prog_bar.progress(1.0, text="✅ 완료!")
+            status_ph.empty()
+
+            # session_state 저장
+            st.session_state["bulk_zip"]     = master_buf.getvalue()
+            st.session_state["bulk_results"] = results
+            st.session_state["bulk_ok"]      = ok_cnt
+            st.session_state["bulk_fail"]    = fail_cnt
+
+            if fail_cnt == 0:
+                st.success(f"✅ 전체 {ok_cnt}개 학교 패키지 생성 완료!")
+            else:
+                st.warning(f"⚠️ 성공 {ok_cnt}개 / 실패 {fail_cnt}개")
+
+        # 다운로드 버튼
+        bulk_zip = st.session_state.get("bulk_zip")
+        if bulk_zip:
+            bulk_fname = f"하영자원_전체계약서류_{date.today().strftime('%Y%m%d')}.zip"
+            st.download_button(
+                label         = f"📥 {bulk_fname} 다운로드 ({len(bulk_zip)//1024}KB)",
+                data          = bulk_zip,
+                file_name     = bulk_fname,
+                mime          = "application/zip",
+                key           = "bulk_dl",
+                use_container_width=True,
+                type          = "primary",
+            )
+
+            # 결과 상세 테이블
+            bulk_res = st.session_state.get("bulk_results", [])
+            if bulk_res:
+                with st.expander("📋 학교별 생성 결과 상세"):
+                    df_res = pd.DataFrame([{
+                        "학교명": r[0],
+                        "결과":   "✅ 성공" if r[1] else "❌ 실패",
+                        "파일크기": f"{r[2]//1024}KB" if r[1] else "-",
+                        "오류":   str(list(r[3].keys())) if r[3] else "-",
+                    } for r in bulk_res])
+                    st.dataframe(df_res, use_container_width=True, hide_index=True)
+
 
 # ============================================================
 # [섹션 D] 📄 위수탁계약서 단독 작성 UI (관리자 전용)
@@ -3179,22 +3964,34 @@ elif role == "🏫 학교 마스터 관리":
             and (sel_sta_f == "전체" or s["계약상태"] == sel_sta_f)
         ]
 
+        # ── [3단계 ①] D-day 색상 강화 ──────────────────────
+        def _dday_color(dday_str: str) -> str:
+            if "⛔" in dday_str: return "🟥"
+            if "🔴" in dday_str: return "🟥"
+            if "🟡" in dday_str: return "🟨"
+            if "🟢" in dday_str: return "🟩"
+            return "⬜"
+
         df_a = pd.DataFrame([{
-            "학교명":     s["학교명"],
-            "교육청":     s["교육청"],
-            "단가(원/L)": s["음식물단가"],
-            "계약상태":   s["계약상태"],
-            "계약만료":   s["계약종료"] or "-",
-            "D-day":     s["계약D-day"],
-            "담당자전화": s["전화"] or "-",
+            "학교명":       s["학교명"],
+            "교육청":       s["교육청"],
+            "단가(원/L)":  s["음식물단가"],
+            "계약상태":     s["계약상태"],
+            "계약만료":     s["계약종료"] or "-",
+            "D-day":       s["계약D-day"],
+            "⬛상태":       _dday_color(s["계약D-day"]),
+            "담당자이메일": s.get("담당자이메일","") or "-",
         } for s in filtered])
 
         st.dataframe(df_a, use_container_width=True, hide_index=True,
                      column_config={
-                         "단가(원/L)": st.column_config.NumberColumn(format="%d원"),
-                         "D-day":     st.column_config.TextColumn(width="small"),
+                         "단가(원/L)":  st.column_config.NumberColumn(format="%d원"),
+                         "D-day":      st.column_config.TextColumn(width="small"),
+                         "⬛상태":      st.column_config.TextColumn("상태", width="small"),
+                         "담당자이메일": st.column_config.TextColumn(width="medium"),
                      })
-        st.caption(f"총 {len(filtered)}개 학교 표시 중 (전체 {n_total}개)")
+        st.caption(f"총 {len(filtered)}개 학교 표시 중 (전체 {n_total}개)  "
+                   f"🟥 만료/임박  🟨 90일 이내  🟩 정상  ⬜ 미설정")
 
         # CSV 다운로드
         csv_buf = io.StringIO()
@@ -3207,20 +4004,71 @@ elif role == "🏫 학교 마스터 관리":
             key="a_csv_dl"
         )
 
+        # ── [3단계 ②] 갱신 필요 체크리스트 ─────────────────
+        st.divider()
+        st.markdown("##### 📋 갱신 필요 체크리스트 (D-90 이내)")
+        renew_targets = [
+            s for s in all_schools
+            if s["계약상태"] == "계약중"
+            and s["계약종료"]
+            and s["계약종료"] not in ("", "9999-12-31")
+            and ("⛔" in s["계약D-day"] or "🔴" in s["계약D-day"] or "🟡" in s["계약D-day"])
+        ]
+
+        if not renew_targets:
+            st.success("✅ D-90 이내 만료 예정 학교 없음")
+        else:
+            st.warning(f"⚠️ 총 {len(renew_targets)}개 학교 갱신 필요")
+
+            checklist_lines = [
+                f"하영자원 계약 갱신 체크리스트",
+                f"기준일: {date.today().strftime('%Y년 %m월 %d일')}",
+                "=" * 50,
+            ]
+            for s in renew_targets:
+                # a_get_all_schools()에 담당자이메일 포함됨 (8단계 수정)
+                email = s.get("담당자이메일", "") or ""
+
+                line = (f"[ ] {s['학교명']}"
+                        f"  만료일: {s['계약종료']}"
+                        f"  {s['계약D-day']}"
+                        f"  이메일: {email or '미등록'}")
+                checklist_lines.append(line)
+
+                # 화면에도 표시
+                st.markdown(
+                    f"- **{s['학교명']}** &nbsp; {s['계약D-day']} &nbsp; "
+                    f"만료: `{s['계약종료']}` &nbsp; 📧 {email or '이메일 미등록'}",
+                    unsafe_allow_html=True
+                )
+
+            checklist_lines.append("=" * 50)
+            checklist_txt = "\n".join(checklist_lines)
+
+            st.download_button(
+                label     = "📋 갱신 체크리스트 TXT 다운로드",
+                data      = checklist_txt.encode("utf-8"),
+                file_name = f"갱신체크리스트_{date.today().strftime('%Y%m%d')}.txt",
+                mime      = "text/plain",
+                key       = "a_checklist_dl",
+            )
+
     # ▸ 탭2: 학교 정보 수정
     with tab_edit:
         school_names = [s["학교명"] for s in all_schools]
         sel_school   = st.selectbox("수정할 학교 선택", school_names, key="a_sel_school")
         sel_s        = next((s for s in all_schools if s["학교명"] == sel_school), {})
 
-        # 담당자 정보 별도 조회
+        # 담당자 전체 정보 조회 (부담당자 포함)
         try:
             sp_row = get_conn().execute(
-                "SELECT 담당자명, 담당자연락처, 담당자이메일 FROM school_prices WHERE 학교명=?",
+                """SELECT 담당자명, 담당자연락처, 담당자이메일,
+                          담당자2명, 담당자2연락처, 행정실팩스, 계약_사인_여부
+                   FROM school_prices WHERE 학교명=?""",
                 (sel_school,)
-            ).fetchone() or ("", "", "")
+            ).fetchone() or ("","","","","","",0)
         except Exception:
-            sp_row = ("", "", "")
+            sp_row = ("","","","","","",0)
 
         ec1, ec2 = st.columns(2)
         with ec1:
@@ -3232,7 +4080,7 @@ elif role == "🏫 학교 마스터 관리":
                                         value=int(sel_s.get("음식물단가", 150)),
                                         min_value=1, step=10, key="a_e_unit")
         with ec2:
-            st.markdown("##### 📋 계약 및 담당자")
+            st.markdown("##### 📋 계약 정보")
             a_start  = st.text_input("계약 시작일", value=sel_s.get("계약시작",""), key="a_e_start")
             a_end    = st.text_input("계약 종료일", value=sel_s.get("계약종료",""), key="a_e_end")
             a_status = st.selectbox("계약 상태",
@@ -3242,12 +4090,31 @@ elif role == "🏫 학교 마스터 관리":
                                         if sel_s.get("계약상태","미계약") in ["계약중","미계약","계약만료","협의중"]
                                         else "미계약"),
                                     key="a_e_status")
-            a_mgr    = st.text_input("담당자명",    value=sp_row[0], key="a_e_mgr")
-            a_mgr_t  = st.text_input("담당자연락처",value=sp_row[1], key="a_e_mgr_t")
-            a_mgr_e  = st.text_input("담당자이메일",value=sp_row[2], key="a_e_mgr_e")
-        a_note = st.text_area("비고", value=sel_s.get("비고",""), height=60, key="a_e_note")
+            a_note = st.text_area("비고", value=sel_s.get("비고",""), height=60, key="a_e_note")
 
-        if st.button("💾 저장", type="primary", use_container_width=True, key="a_save"):
+        # ── [6단계] 담당자 고도화 — 주담당자 + 부담당자 ──────
+        st.markdown("##### 👤 담당자 정보")
+        d1, d2 = st.columns(2)
+        with d1:
+            st.caption("주담당자 (행정실)")
+            a_mgr   = st.text_input("주담당자명",    value=sp_row[0], key="a_e_mgr")
+            a_mgr_t = st.text_input("주담당자 연락처", value=sp_row[1], key="a_e_mgr_t")
+            a_mgr_e = st.text_input("주담당자 이메일", value=sp_row[2], key="a_e_mgr_e")
+            # 문자/메일 바로가기
+            if sp_row[1]:
+                st.markdown(f"📱 [문자 보내기](sms:{sp_row[1]})", unsafe_allow_html=False)
+            if sp_row[2]:
+                st.markdown(f"📧 [이메일 보내기](mailto:{sp_row[2]})", unsafe_allow_html=False)
+        with d2:
+            st.caption("부담당자 (영양사 등)")
+            a_mgr2  = st.text_input("부담당자명",    value=sp_row[3], key="a_e_mgr2")
+            a_mgr2t = st.text_input("부담당자 연락처", value=sp_row[4], key="a_e_mgr2t")
+            a_fax   = st.text_input("행정실 팩스",   value=sp_row[5], key="a_e_fax")
+            a_sign  = st.checkbox("계약서 도장/서명 수령 완료",
+                                   value=bool(sp_row[6]), key="a_e_sign")
+
+        # 저장 버튼
+        if st.button("💾 전체 저장", type="primary", use_container_width=True, key="a_save"):
             try:
                 a_update_school(
                     학교명=sel_school, 단가=int(a_unit),
@@ -3257,10 +4124,87 @@ elif role == "🏫 학교 마스터 관리":
                     비고=a_note.strip(), 담당자명=a_mgr.strip(),
                     담당자연락처=a_mgr_t.strip(), 담당자이메일=a_mgr_e.strip(),
                 )
+                a_update_contacts(
+                    학교명=sel_school,
+                    담당자2명=a_mgr2.strip(),
+                    담당자2연락처=a_mgr2t.strip(),
+                    행정실팩스=a_fax.strip(),
+                    계약_사인_여부=a_sign,
+                )
                 st.success(f"✅ **{sel_school}** 정보 저장 완료")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 저장 오류: {e}")
+
+        # ── [6단계] 담당자 명부 CSV 다운로드 ─────────────────
+        st.divider()
+        csv_contact = get_all_contact_csv()
+        st.download_button(
+            label     = "📥 전체 담당자 명부 CSV 다운로드",
+            data      = csv_contact,
+            file_name = f"하영자원_담당자명부_{date.today().strftime('%Y%m%d')}.csv",
+            mime      = "text/csv",
+            key       = "a_contact_csv",
+        )
+
+        # ── [6단계] 계약 체결 워크플로우 5단계 ───────────────
+        st.divider()
+        st.markdown("##### 🗂️ 계약 체결 워크플로우")
+        st.caption("각 단계를 클릭하면 완료/미완료 토글 — 5단계 모두 완료 시 계약상태 자동 '계약중' 변경")
+
+        WF_STEPS = [
+            "📄 1단계: 견적서 발송",
+            "📝 2단계: 위수탁계약서 발송",
+            "📦 3단계: 서류 제출 완료",
+            "🏛️ 4단계: 나라장터 전자계약",
+            "✅ 5단계: 계약 완료",
+        ]
+
+        # 해당 학교 최신 계약 ID 조회
+        try:
+            wf_row = get_conn().execute(
+                """SELECT id, 단계1_완료, 단계2_완료, 단계3_완료,
+                          단계4_완료, 단계5_완료, 계약_상태
+                   FROM contract_master WHERE 학교명=?
+                   ORDER BY id DESC LIMIT 1""",
+                (sel_school,)
+            ).fetchone()
+        except Exception:
+            wf_row = None
+
+        if not wf_row:
+            st.info("⚠️ 계약 이력이 없습니다. 📂 계약 이력 탭에서 먼저 계약을 등록하세요.")
+        else:
+            wf_id    = wf_row[0]
+            wf_done  = [bool(wf_row[i+1]) for i in range(5)]
+            wf_count = sum(wf_done)
+            wf_pct   = wf_count / 5
+
+            # 진행률 바
+            st.progress(wf_pct,
+                text=f"진행률 {wf_count}/5단계 완료 "
+                     f"({'🎉 계약완료!' if wf_count == 5 else f'{int(wf_pct*100)}%'})")
+
+            # 단계별 토글 버튼
+            wf_cols = st.columns(5)
+            for i, (col, label, done) in enumerate(zip(wf_cols, WF_STEPS, wf_done)):
+                with col:
+                    icon  = "✅" if done else "☐"
+                    color = "#34a853" if done else "#ea4335"
+                    st.markdown(
+                        f"<div style='text-align:center;font-size:11px;"
+                        f"color:{color};font-weight:bold;'>{icon}</div>",
+                        unsafe_allow_html=True
+                    )
+                    btn_label = label.split(":")[0]  # "📄 1단계"만 표시
+                    if col.button(btn_label, key=f"wf_{wf_id}_{i+1}",
+                                  use_container_width=True,
+                                  type="primary" if done else "secondary"):
+                        wf_toggle_step(wf_id, i + 1)
+                        st.rerun()
+
+            if wf_count == 5:
+                st.success(f"🎉 **{sel_school}** 계약 체결 완료! 계약상태가 '계약중'으로 변경되었습니다.")
 
         st.divider()
         with st.expander("➕ 신규 학교 추가"):
@@ -3306,18 +4250,235 @@ elif role == "🏫 학교 마스터 관리":
 
         if contracts:
             df_con = pd.DataFrame([{
-                "ID":       c["id"],
-                "학교명":   c["학교명"],
-                "계약기간": f"{c['계약_시작일']} ~ {c['계약_종료일']}",
+                "ID":         c["id"],
+                "학교명":     c["학교명"],
+                "계약기간":   f"{c['계약_시작일']} ~ {c['계약_종료일']}",
                 "단가(원/L)": c["단가"],
-                "상태":     c["계약_상태"],
-                "D-day":   c.get("D-day",""),
-                "나라장터": c["나라장터_번호"] or "-",
-                "비고":     c["비고"] or "-",
+                "상태":       c["계약_상태"],
+                "D-day":     c.get("D-day",""),
+                "나라장터":   c["나라장터_번호"] or "-",
+                "비고":       c["비고"] or "-",
             } for c in contracts])
             st.dataframe(df_con, use_container_width=True, hide_index=True)
         else:
             st.info("등록된 계약 이력이 없습니다.")
+
+        # ── [5단계] 나라장터 계약번호 파서 ───────────────────
+        st.divider()
+        st.markdown("##### 🔍 나라장터 계약번호 파서")
+        g2b_col1, g2b_col2 = st.columns([2, 1])
+        with g2b_col1:
+            g2b_input = st.text_input(
+                "계약번호 입력 (예: R26TA01543339 00)",
+                value="R26TA01543339 00",
+                key="g2b_input"
+            )
+        with g2b_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            g2b_parse_btn = st.button("🔍 파싱", key="g2b_parse", use_container_width=True)
+
+        if g2b_parse_btn and g2b_input.strip():
+            parsed = parse_g2b_contract_no(g2b_input.strip())
+            if "오류" in parsed:
+                st.error(f"❌ {parsed['오류']}")
+            else:
+                pc1, pc2, pc3, pc4 = st.columns(4)
+                pc1.metric("계약유형",  parsed["계약유형"])
+                pc2.metric("계약연도",  parsed["계약연도"])
+                pc3.metric("기관코드",  parsed["기관코드"])
+                pc4.metric("차수",      parsed["차수"])
+                st.info(
+                    f"**일련번호:** `{parsed['일련번호']}`  |  "
+                    f"**차수코드:** `{parsed['차수코드']}`  |  "
+                    f"**변경계약:** {'⚠️ 예' if parsed['변경계약여부'] else '✅ 아니오(원계약)'}"
+                )
+                if parsed["변경계약여부"]:
+                    st.warning("⚠️ 변경계약입니다. 원계약과 비교 확인이 필요합니다.")
+
+        # ── [5단계] 전자문서 수신 현황 ───────────────────────
+        st.divider()
+        st.markdown("##### 📩 전자문서 수신 현황")
+
+        _status_icon = {
+            "미수신":   "⚪",
+            "수신":     "📩",
+            "서명완료": "✍️",
+            "계약완료": "✅",
+            "반려":     "❌",
+        }
+
+        try:
+            edoc_list = g2b_get_edoc_list()
+        except Exception:
+            edoc_list = []
+
+        # 상태 필터
+        edoc_status_f = st.selectbox(
+            "상태 필터",
+            ["전체", "미수신", "수신", "서명완료", "계약완료", "반려"],
+            key="edoc_status_f"
+        )
+        edoc_filtered = [
+            e for e in edoc_list
+            if edoc_status_f == "전체" or e["계약서_상태"] == edoc_status_f
+        ]
+
+        if edoc_filtered:
+            df_edoc = pd.DataFrame([{
+                "ID":         e["id"],
+                "학교명":     e["학교명"],
+                "나라장터번호": e["나라장터_번호"] or "-",
+                "전자문서번호": (e["전자문서번호"] or "-")[:20] + "..." if len(e.get("전자문서번호","")) > 20 else e.get("전자문서번호","-"),
+                "수신일자":   e["수신일자"] or "-",
+                "상태":       f"{_status_icon.get(e['계약서_상태'],'⚪')} {e['계약서_상태']}",
+                "계약기간":   f"{e['계약_시작일']} ~ {e['계약_종료일']}",
+            } for e in edoc_filtered])
+            st.dataframe(df_edoc, use_container_width=True, hide_index=True)
+        else:
+            st.info("해당 조건의 전자문서가 없습니다.")
+
+        # 전자문서 상태 변경 폼
+        with st.expander("📩 전자문서 정보 입력 / 상태 변경"):
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                edoc_contract_id = st.number_input(
+                    "계약 ID (위 목록의 ID 입력)", min_value=1, step=1, key="edoc_cid"
+                )
+                edoc_no   = st.text_input(
+                    "전자문서번호 (UUID)",
+                    value="019c93cb-58c9-7b21-981f-a64746d74cbc",
+                    key="edoc_no"
+                )
+                edoc_sender = st.text_input(
+                    "송신자 ID (발주기관)",
+                    value="A311030206000",
+                    key="edoc_sender"
+                )
+            with ec2:
+                edoc_recv = st.text_input(
+                    "수신일자 (YYYY-MM-DD)",
+                    value=date.today().strftime("%Y-%m-%d"),
+                    key="edoc_recv"
+                )
+                edoc_new_status = st.selectbox(
+                    "계약서 상태",
+                    ["미수신", "수신", "서명완료", "계약완료", "반려"],
+                    key="edoc_new_status"
+                )
+                st.markdown(f"""
+**상태별 의미:**
+- ⚪ 미수신 — 전자문서 미도착
+- 📩 수신 — 문서 도착, 검토 중
+- ✍️ 서명완료 — 전자서명 완료 → **계약중 자동 변경**
+- ✅ 계약완료 — 최종 완료
+- ❌ 반려 — 반려, 재발행 필요
+""")
+
+            if st.button(
+                "💾 전자문서 상태 저장",
+                type="primary", use_container_width=True, key="edoc_save"
+            ):
+                try:
+                    g2b_update_edoc(
+                        contract_id = int(edoc_contract_id),
+                        edoc_no     = edoc_no.strip(),
+                        sender_id   = edoc_sender.strip(),
+                        recv_date   = edoc_recv.strip(),
+                        edoc_status = edoc_new_status,
+                    )
+                    if edoc_new_status == "서명완료":
+                        st.success("✍️ 서명완료 처리! 계약상태가 **계약중**으로 자동 변경되었습니다.")
+                    elif edoc_new_status == "계약완료":
+                        st.success("✅ 계약완료 처리되었습니다.")
+                    else:
+                        st.success(f"💾 저장 완료: {edoc_new_status}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 저장 오류: {e}")
+        st.divider()
+        st.markdown("##### 🔄 계약 갱신 완료 처리")
+        st.caption("갱신 완료 시 계약 종료일 자동 +1년, 새 계약 이력 자동 등록")
+
+        renew_schools = [
+            s for s in all_schools
+            if s["계약상태"] == "계약중"
+            and s["계약종료"]
+            and s["계약종료"] not in ("", "9999-12-31")
+        ]
+
+        if not renew_schools:
+            st.info("갱신 처리 가능한 계약중 학교가 없습니다.")
+        else:
+            rn_col1, rn_col2 = st.columns(2)
+            with rn_col1:
+                renew_sel = st.selectbox(
+                    "갱신할 학교 선택",
+                    [s["학교명"] for s in renew_schools],
+                    key="rn_sel"
+                )
+            renew_s = next((s for s in renew_schools if s["학교명"] == renew_sel), {})
+
+            # 갱신 후 날짜 자동 계산 (+1년)
+            try:
+                from datetime import timedelta
+                old_end   = date.fromisoformat(renew_s.get("계약종료","2027-02-28"))
+                new_start = old_end + timedelta(days=1)
+                new_end   = date(old_end.year + 1, old_end.month, old_end.day)
+            except Exception:
+                new_start = date.today()
+                new_end   = date(date.today().year + 1, date.today().month, date.today().day)
+
+            with rn_col2:
+                st.info(
+                    f"**{renew_sel}** 갱신 예정\n\n"
+                    f"현재 만료: `{renew_s.get('계약종료','')}` → "
+                    f"갱신 후: `{new_start}` ~ `{new_end}`"
+                )
+
+            rn_unit = st.number_input(
+                "갱신 단가(원/L) — 변경 없으면 현재값 유지",
+                value=int(renew_s.get("음식물단가", 150)),
+                min_value=1, step=10, key="rn_unit"
+            )
+            rn_g2b  = st.text_input("갱신 나라장터 번호 (신규 계약번호)", key="rn_g2b")
+            rn_note = st.text_input("갱신 비고", value="갱신 계약", key="rn_note")
+
+            if st.button(
+                f"✅ {renew_sel} 갱신완료 처리",
+                type="primary", use_container_width=True, key="rn_btn"
+            ):
+                try:
+                    # ① 새 계약 이력 등록
+                    a_add_contract(
+                        학교명      = renew_sel,
+                        계약번호    = rn_g2b.strip(),
+                        시작일      = str(new_start),
+                        종료일      = str(new_end),
+                        폐기물종류  = "음식물류폐기물",
+                        단가        = int(rn_unit),
+                        월예상량    = 0.0,
+                        상태        = "계약중",
+                        나라장터번호= rn_g2b.strip(),
+                        비고        = rn_note.strip(),
+                    )
+                    # ② school_prices 계약 상태/날짜 업데이트
+                    get_conn().execute(
+                        """UPDATE school_prices SET
+                           계약_시작일=?, 계약_종료일=?,
+                           계약_상태=?, 음식물단가=?, updated_at=?
+                           WHERE 학교명=?""",
+                        (str(new_start), str(new_end),
+                         "계약중", int(rn_unit),
+                         datetime.now().strftime("%Y-%m-%d"), renew_sel)
+                    )
+                    get_conn().commit()
+                    st.success(
+                        f"✅ **{renew_sel}** 갱신 완료!\n\n"
+                        f"새 계약기간: {new_start} ~ {new_end}  |  단가: {rn_unit}원/L"
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 갱신 처리 오류: {e}")
 
         st.divider()
         with st.expander("➕ 계약 이력 신규 등록"):
