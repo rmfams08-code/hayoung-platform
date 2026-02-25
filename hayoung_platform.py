@@ -1,7 +1,6 @@
 # 이 코드는 파이썬으로 웹 화면을 만들어주는 '스트림릿(Streamlit)' 라이브러리를 사용합니다.
 # 실행 방법: cd Desktop\하영자원 입력 후 python -m streamlit run hayoung_platform.py 실행
 
-
 import streamlit as st
 import pandas as pd
 import time
@@ -49,7 +48,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 데이터 영구 저장 및 실시간 연산 (기존 V5 유지)
+# 2. 데이터 영구 저장 및 실시간 연산 (기존 V5 유지 + 연도별 데이터 추가)
 # ==========================================
 DB_FILE = "hayoung_data_v5.csv"
 
@@ -59,21 +58,26 @@ def load_data():
     except FileNotFoundError:
         cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
         sample_data = []
-        for month, days in [(1, 31), (2, 25)]:
-            for day in range(1, days + 1):
-                if day % 7 in [0, 1]: continue 
-                for school, count in STUDENT_COUNTS.items():
-                    food = int(count * random.uniform(0.1, 0.2))
-                    recycle = int(count * random.uniform(0.05, 0.1))
-                    biz = int(count * random.uniform(0.02, 0.05))
-                    status = "정산완료" if month == 1 else "정산대기"
-                    
-                    sample_data.append({
-                        "날짜": f"2026-{month:02d}-{day:02d} {random.randint(8, 15):02d}:{random.randint(0, 59):02d}:{random.randint(0, 59):02d}",
-                        "학교명": school, "학생수": count, "수거업체": "하영자원(본사 직영)",
-                        "음식물(kg)": food, "재활용(kg)": recycle, "사업장(kg)": biz,
-                        "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": status
-                    })
+        
+        # 2024년, 2025년, 2026년 임의 데이터 생성
+        for year in [2024, 2025, 2026]:
+            # 너무 데이터가 많아지는 것을 방지하기 위해 2024, 2025년은 일부 달력만 생성
+            months_to_gen = [(11, 30), (12, 31)] if year != 2026 else [(1, 31), (2, 25)]
+            for month, days in months_to_gen:
+                for day in range(1, days + 1, 3): # 3일 간격 생성
+                    if day % 7 in [0, 1]: continue 
+                    for school, count in STUDENT_COUNTS.items():
+                        food = int(count * random.uniform(0.1, 0.2))
+                        recycle = int(count * random.uniform(0.05, 0.1))
+                        biz = int(count * random.uniform(0.02, 0.05))
+                        status = "정산완료" if year != 2026 else "정산대기"
+                        
+                        sample_data.append({
+                            "날짜": f"{year}-{month:02d}-{day:02d} {random.randint(8, 15):02d}:{random.randint(0, 59):02d}:{random.randint(0, 59):02d}",
+                            "학교명": school, "학생수": count, "수거업체": "하영자원(본사 직영)",
+                            "음식물(kg)": food, "재활용(kg)": recycle, "사업장(kg)": biz,
+                            "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": status
+                        })
         df = pd.DataFrame(sample_data, columns=cols)
         df.to_csv(DB_FILE, index=False)
         return df
@@ -91,9 +95,10 @@ if not df_all.empty:
     df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].astype(str).str[:7]
+    df_all['년도'] = df_all['날짜'].astype(str).str[:4] # 연도별 구분을 위해 추가
     df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
 else:
-    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "탄소감축량(kg)"]
+    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "년도", "탄소감축량(kg)"]
     df_all = pd.DataFrame(columns=cols)
 
 # ==========================================
@@ -124,14 +129,12 @@ def create_secure_excel(df, title):
     return output.getvalue()
 
 # ==========================================
-# [모드 1] 관리자 (본사) 모드 (디자인 전면 업그레이드)
+# [모드 1] 관리자 (본사) 모드
 # ==========================================
 if role == "🏢 관리자 (본사 관제)":
-    # 1. 상단 타이틀 및 부제목 (이미지 반영)
     st.markdown("<h1 style='display:flex; align-items:center;'>🏢 본사 통합 관제 및 정산 센터</h1>", unsafe_allow_html=True)
     st.markdown("<p style='color: #5f6368; font-size: 16px;'>음식물, 사업장폐기물, 재활용 통계를 완벽히 분리하여 수익/비용 관리가 가능합니다.</p>", unsafe_allow_html=True)
     
-    # 2. 상단 5개 요약 카드 (이미지 반영)
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: st.markdown(f'<div class="custom-card custom-card-red"><div class="metric-title">🗑️ 음식물 총 수거</div><div class="metric-value-food">{df_all["음식물(kg)"].sum():,} kg</div></div>', unsafe_allow_html=True)
     with col2: st.markdown(f'<div class="custom-card custom-card-purple"><div class="metric-title">🗄️ 사업장 총 수거</div><div class="metric-value-biz">{df_all["사업장(kg)"].sum():,} kg</div></div>', unsafe_allow_html=True)
@@ -139,7 +142,6 @@ if role == "🏢 관리자 (본사 관제)":
     with col4: st.markdown(f'<div class="custom-card"><div class="metric-title">💰 누적 청구 금액</div><div class="metric-value-total">{df_all["최종정산액"].sum():,} 원</div></div>', unsafe_allow_html=True)
     with col5: st.markdown(f'<div class="custom-card custom-card-orange"><div class="metric-title">🛡️ 안전 점검 완료율</div><div class="metric-value-total" style="color:#1a73e8;">100 %</div></div>', unsafe_allow_html=True)
 
-    # 3. 거대한 전사 ESG 배너 (이미지 반영)
     total_co2_all = df_all['탄소감축량(kg)'].sum()
     tree_count_all = int(total_co2_all / 6.6)
     st.markdown(f"""
@@ -161,7 +163,6 @@ if role == "🏢 관리자 (본사 관제)":
     with col_esg1: st.button("📄 전사 ESG 성과 보고서 출력", use_container_width=True)
     st.write("---")
 
-    # 4. 하단 탭 영역 (이미지 반영)
     st.subheader("📑 통합 및 개별 정산 시트(Sheet) 🔗")
     tab_total, tab_food, tab_biz, tab_recycle, tab_map, tab_sub = st.tabs([
         "전체 통합 정산", "음식물 정산 내역", "사업장 정산 내역", "재활용 정산 내역", "📍 실시간 차량 관제", "🤝 외주업체 현황"
@@ -172,7 +173,6 @@ if role == "🏢 관리자 (본사 관제)":
         with sub_all: st.dataframe(df_all[['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
         with sub_1: st.dataframe(df_all[df_all['월별']=='2026-01'][['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
         with sub_2: st.dataframe(df_all[df_all['월별']=='2026-02'][['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
-        
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
         with col_btn2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
@@ -182,7 +182,6 @@ if role == "🏢 관리자 (본사 관제)":
         with f_all: st.dataframe(df_all[['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
         with f_1: st.dataframe(df_all[df_all['월별']=='2026-01'][['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
         with f_2: st.dataframe(df_all[df_all['월별']=='2026-02'][['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
-        # 하단 버튼 (이미지 완벽 반영)
         st.write("")
         col_bf1, col_bf2 = st.columns(2)
         with col_bf1: st.button("🏢 업체별 정산명세서 발송 (음식물)", use_container_width=True)
@@ -213,19 +212,14 @@ if role == "🏢 관리자 (본사 관제)":
         st.map(pd.DataFrame({'lat': [37.20, 37.25], 'lon': [127.05, 127.10]}))
         
     with tab_sub:
-        # 5. 외주업체 현황 (이미지 완벽 반영)
         st.subheader("🤝 외주 수거업체 실시간 업무 및 안전 평가 현황")
-        
-        # 계약 알림 배너
         st.markdown('<div class="alert-box">🔔 <b>[계약 갱신 알림]</b> \'B자원\' 업체와의 수거 위탁 계약 만료가 30일 앞으로 다가왔습니다. (만료일: 2026-03-25)</div>', unsafe_allow_html=True)
         
-        # 3색 상태 카드
         col_s1, col_s2, col_s3 = st.columns(3)
         with col_s1: st.info("🏆 이달의 우수 안전 업체: **A환경** (98점)")
         with col_s2: st.warning("⚠️ 주의 필요 업체: **B자원** (과속 1회 감지)")
         with col_s3: st.success("✅ 스쿨존 속도위반 경고 건수: **1건**")
 
-        # 업체 테이블
         vendor_data = pd.DataFrame({
             "외주업체명": ["A환경", "B자원"],
             "담당학교": ["동탄중학교", "수원고등학교"],
@@ -237,7 +231,6 @@ if role == "🏢 관리자 (본사 관제)":
         st.dataframe(vendor_data, use_container_width=True)
         
         st.write("---")
-        # 타임라인 
         st.subheader("🔎 담당 차량 및 기사 상세 조회 (타임라인) 🔗")
         st.write("실시간 이동 동선을 조회할 업체를 선택하세요")
         sel_vendor = st.selectbox("", ["A환경", "B자원", "C로지스"], label_visibility="collapsed")
@@ -277,7 +270,7 @@ elif role == "🏫 학교 담당자 (행정실)":
         """, unsafe_allow_html=True)
 
         st.subheader("📊 폐기물 배출량 통계 분석 (막대그래프)")
-        tab_daily, tab_monthly = st.tabs(["🗓️ 일별 배출량 (상세)", "🗓️ 월별 배출량 (추이)"])
+        tab_daily, tab_monthly = st.tabs(["🗓️ 일별 배출량 (상세)", "🗓️ 연도별/월별 배출량 (추이)"])
         
         with tab_daily:
             st.write("해당 월의 일자별 수거량입니다. (단위: kg)")
@@ -296,38 +289,80 @@ elif role == "🏫 학교 담당자 (행정실)":
                 st.markdown("<h5 style='text-align:center; color:#34a853; font-weight:bold;'>♻️ 재활용 수거량</h5>", unsafe_allow_html=True)
                 st.bar_chart(daily_grouped.set_index('일자')['재활용(kg)'], color="#34a853")
 
+        # 1. 월별 배출량 그래프 수정 (연도별 탭 추가 및 품목별 분리)
         with tab_monthly:
-            st.write("월별 전체 수거량 추이입니다. (단위: kg)")
-            monthly_df_school = df_school.groupby('월별')[['음식물(kg)', '사업장(kg)', '재활용(kg)']].sum()
-            st.bar_chart(monthly_df_school)
+            st.write("연도별 및 월별 전체 수거량 추이입니다. (단위: kg)")
+            years = sorted(df_school['년도'].unique(), reverse=True)
+            year_tabs = st.tabs([f"📅 {y}년" for y in years])
+            
+            for i, y in enumerate(years):
+                with year_tabs[i]:
+                    y_df = df_school[df_school['년도'] == y]
+                    monthly_grouped = y_df.groupby('월별')[['음식물(kg)', '사업장(kg)', '재활용(kg)']].sum().reset_index()
+                    
+                    mc1, mc2, mc3 = st.columns(3)
+                    with mc1:
+                        st.markdown("<h5 style='text-align:center; color:#ea4335; font-weight:bold;'>🗑️ 음식물 수거량 (월별)</h5>", unsafe_allow_html=True)
+                        st.bar_chart(monthly_grouped.set_index('월별')['음식물(kg)'], color="#ea4335")
+                    with mc2:
+                        st.markdown("<h5 style='text-align:center; color:#9b59b6; font-weight:bold;'>🗄️ 사업장 수거량 (월별)</h5>", unsafe_allow_html=True)
+                        st.bar_chart(monthly_grouped.set_index('월별')['사업장(kg)'], color="#9b59b6")
+                    with mc3:
+                        st.markdown("<h5 style='text-align:center; color:#34a853; font-weight:bold;'>♻️ 재활용 수거량 (월별)</h5>", unsafe_allow_html=True)
+                        st.bar_chart(monthly_grouped.set_index('월별')['재활용(kg)'], color="#34a853")
 
         st.write("---")
         st.markdown("<h5 style='color:#2e7d32; font-weight:bold;'>🛡️ 금일 수거차량 실시간 안전 점검 현황</h5>", unsafe_allow_html=True)
         st.markdown(f'<div class="safety-box">✅ 배차 차량: 하영자원 (본사 직영 운행) <br>✅ 스쿨존 규정속도 준수 여부: <span style="color:blue;">정상 (MAX 28km/h 통과)</span> <br>✅ 후방카메라 작동 및 안전요원 동승: 적합 (점검완료)</div>', unsafe_allow_html=True)
 
         st.write("---")
+        
+        # 2. 행정 증빙 서류 하위 탭 분리 및 품목별 다운로드 추가
         st.subheader("🖨️ 행정 증빙 서류 자동 출력 (관공서 법정 양식 적용)")
-        col_doc1, col_doc2 = st.columns(2)
-        with col_doc1:
-            st.download_button("📄 [월간] 폐기물 위탁처리 정산(청구)서 다운로드", 
-                               data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','최종정산액']], "폐기물 위탁처리 정산(청구)서"), 
-                               file_name=f"{school}_월간정산서.xlsx", use_container_width=True)
-        with col_doc2:
-            st.download_button("📄 [실적] 폐기물 배출 및 처리실적보고서 (법정 제30호서식)", 
-                               data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)']], "[폐기물관리법 시행규칙 별지 제30호서식] 폐기물 배출 및 처리 실적보고"), 
-                               file_name=f"{school}_실적보고서.xlsx", use_container_width=True)
+        st.write("아래 메뉴(Tab)를 클릭하여 필요한 서류를 품목별로 다운로드하세요.")
+        
+        doc_tab1, doc_tab2, doc_tab3, doc_tab4 = st.tabs([
+            "📊 [월간] 폐기물 정산(청구)서", 
+            "📈 [실적] 처리실적보고서 (제30호)", 
+            "♻️ 사업장 재활용 상계증빙", 
+            "🔗 올바로시스템 전자인계서"
+        ])
+        
+        with doc_tab1:
+            st.info("💡 행정실 회계 처리를 위한 월간 정산서입니다. 통합본 또는 품목별로 분리하여 다운로드 가능합니다.")
+            col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+            with col_d1:
+                st.download_button("전체 통합본 다운로드", data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','최종정산액']], "통합 정산(청구)서"), file_name=f"{school}_통합_월간정산서.xlsx", use_container_width=True)
+            with col_d2:
+                st.download_button("🗑️ 음식물 전용 다운로드", data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)','음식물비용']], "음식물 정산(청구)서"), file_name=f"{school}_음식물_월간정산서.xlsx", use_container_width=True)
+            with col_d3:
+                st.download_button("🗄️ 사업장 전용 다운로드", data=create_secure_excel(df_school[['날짜','학교명','사업장(kg)','사업장비용']], "사업장 정산(청구)서"), file_name=f"{school}_사업장_월간정산서.xlsx", use_container_width=True)
+            with col_d4:
+                st.download_button("♻️ 재활용 전용 다운로드", data=create_secure_excel(df_school[['날짜','학교명','재활용(kg)','재활용수익']], "재활용 정산(청구)서"), file_name=f"{school}_재활용_월간정산서.xlsx", use_container_width=True)
 
-        st.write("") 
-        col_doc3, col_doc4 = st.columns(2)
-        with col_doc3:
-            st.download_button("📄 사업장 일반폐기물 재활용 상계처리 증빙서", 
+        with doc_tab2:
+            st.info("💡 교육청 및 지자체 제출용 [폐기물관리법 시행규칙 별지 제30호서식] 법정 양식입니다.")
+            col_r1, col_r2, col_r3 = st.columns(3)
+            with col_r1:
+                st.download_button("🗑️ 음식물 실적보고서", data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)']], "음식물 배출 및 처리 실적보고"), file_name=f"{school}_음식물_실적보고서.xlsx", use_container_width=True)
+            with col_r2:
+                st.download_button("🗄️ 사업장 실적보고서", data=create_secure_excel(df_school[['날짜','학교명','사업장(kg)']], "사업장 배출 및 처리 실적보고"), file_name=f"{school}_사업장_실적보고서.xlsx", use_container_width=True)
+            with col_r3:
+                st.download_button("♻️ 재활용 실적보고서", data=create_secure_excel(df_school[['날짜','학교명','재활용(kg)']], "재활용 배출 및 처리 실적보고"), file_name=f"{school}_재활용_실적보고서.xlsx", use_container_width=True)
+
+        with doc_tab3:
+            st.info("💡 사업장 폐기물 처리 시, 재활용 수익으로 비용을 상계(차감)한 내역을 증빙하는 서류입니다.")
+            st.download_button("📄 사업장 일반폐기물 재활용 상계처리 증빙서 다운로드", 
                                data=create_secure_excel(df_school[['날짜','학교명','재활용(kg)','재활용수익']], "사업장 폐기물 재활용 상계처리 증빙 내역"), 
-                               file_name=f"{school}_상계증빙.xlsx", use_container_width=True)
-        with col_doc4:
+                               file_name=f"{school}_상계증빙.xlsx")
+                               
+        with doc_tab4:
+            st.info("💡 버튼 클릭 시 한국환경공단 올바로(Allbaro) 시스템으로 인계서 데이터가 자동 전송됩니다.")
             if st.button("🔗 올바로시스템 전자인계서 연동 및 자동결재", type="primary", use_container_width=True):
                 with st.spinner("한국환경공단 서버와 통신 중..."):
                     time.sleep(2)
                 st.success("올바로시스템에 전자인계서가 성공적으로 이관 및 결재되었습니다!")
+                
     else:
         st.info("해당 학교의 수거 데이터가 아직 전송되지 않았습니다.")
 
