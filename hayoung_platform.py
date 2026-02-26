@@ -3142,7 +3142,7 @@ elif role == "🏫 학교 담당자 (행정실)":
                 st.markdown('<div class="schoolzone-safe">✅ 현재 수거 가능 시간 — 스쿨존 안전 운행 중</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="safety-box">✅ 배차 차량: 하영자원 (본사 직영 운행)<br>✅ 스쿨존 규정속도 준수: 정상 (MAX 28km/h 통과)<br>✅ 후방카메라 및 안전요원 동승: 적합<br>🕐 현재 시각: {datetime.now().strftime("%H:%M")}</div>', unsafe_allow_html=True)
 
-with school_tab4:
+        with school_tab4:
             st.subheader("🖨️ 행정 증빙 서류 자동 출력")
             d1, d2, d3, d4 = st.tabs(["📊 월간 정산서", "📈 처리실적보고서(제30호)", "♻️ 재활용 상계증빙", "🔗 올바로시스템"])
 
