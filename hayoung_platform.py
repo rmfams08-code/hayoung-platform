@@ -1591,10 +1591,10 @@ def generate_contract_doc_pdf(school_name: str, school_biz_no: str,
     fname = f"위수탁계약서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
     fpath = os.path.join(out, fname)
 
-    def ps(n, sz, align=0, bold=False, color=colors.black):
+    def ps(n, sz, align=0, bold=False, color=colors.black, leading_mult=1.6):
         fn = FONTB if bold else FONT
         return ParagraphStyle(n, fontName=fn, fontSize=sz,
-                               alignment=align, leading=sz*1.65,
+                               alignment=align, leading=sz*leading_mult,
                                textColor=color, spaceAfter=1)
 
     doc = SimpleDocTemplate(fpath, pagesize=A4,
@@ -2019,7 +2019,7 @@ def generate_safety_check_pdf(school_name: str,
             Paragraph(yes, ps(f"y{num}", 10, align=1, bold=True)),
             Paragraph(no,  ps(f"no{num}", 10, align=1)),
         ])
-    row_h = [8*mm, 16*mm, 8*mm, 12*mm, 8*mm, 12*mm, 12*mm, 12*mm, 10*mm]
+    row_h = [8*mm, 16*mm, 8*mm, 12*mm, 8*mm, 12*mm, 12*mm, 12*mm]
     chk_tbl = Table(rows, colWidths=[12*mm, W-42*mm, 15*mm, 15*mm],
                     rowHeights=row_h)
     chk_tbl.setStyle(TableStyle([
