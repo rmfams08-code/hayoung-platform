@@ -28,6 +28,23 @@ try:
 except ImportError:
     pass
 
+# ── 필수 패키지 자동 설치 (최초 1회) ─────────────────────────
+import subprocess, sys
+
+def _auto_install(package: str, import_name: str = None):
+    """패키지가 없으면 pip로 자동 설치"""
+    import_name = import_name or package
+    try:
+        __import__(import_name)
+    except ImportError:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", package, "--quiet"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+_auto_install("reportlab")
+_auto_install("openpyxl")
+
 _raw_pw        = os.getenv("EXCEL_PASSWORD", "")
 EXCEL_PASSWORD = _raw_pw if _raw_pw else None
 KAKAO_API_KEY    = os.getenv("KAKAO_API_KEY", "")
@@ -1829,7 +1846,7 @@ def generate_contract_package(
         generated["위수탁계약서"] = generate_contract_doc_pdf(
             school_name, school_biz_no, school_addr, school_tel,
             start_date, end_date,
-            volume_l=f"{volume_l:,.0f}L" if volume_l else "",
+            volume_str=f"{volume_l:,.0f}L" if volume_l else "",
             unit_price=unit_price,
             contract_amount=contract_amount,
         )
