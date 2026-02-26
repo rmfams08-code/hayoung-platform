@@ -1307,22 +1307,58 @@ def create_settlement_excel(settlement: dict, year: int, month: int) -> bytes:
 
 
 def _hy_font() -> str:
-    """한글 폰트 등록 후 폰트명 반환"""
+    """Noto Sans KR 우선 → 맑은고딕 → 나눔고딕 순으로 한글 폰트 등록"""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    for fid, fpath in [
+    candidates = [
+        # Noto Sans KR (Streamlit Cloud / Linux)
+        ("NotoSansKR", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        ("NotoSansKR", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        ("NotoSansKR", "/usr/share/fonts/noto-cjk/NotoSansCJKkr-Regular.otf"),
+        ("NotoSansKR", "/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf"),
+        # Windows
         ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf"),
-        ("MalgunGothic", "/usr/share/fonts/truetype/malgun.ttf"),
         ("NanumGothic",  "C:/Windows/Fonts/NanumGothic.ttf"),
+        # Linux 나눔
         ("NanumGothic",  "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
-    ]:
+        ("NanumGothic",  "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+    ]
+    for fid, fpath in candidates:
         if os.path.exists(fpath):
             try:
                 pdfmetrics.registerFont(TTFont(fid, fpath))
                 return fid
             except Exception:
-                pass
+                continue
+    # 폰트 없으면 Noto 설치 시도 (Cloud 환경)
+    try:
+        import subprocess, sys
+        subprocess.run([sys.executable, "-m", "pip", "install",
+                        "reportlab[fonts]", "--quiet"],
+                       capture_output=True, timeout=30)
+    except Exception:
+        pass
     return "Helvetica"
+
+
+def _hy_font_bold() -> str:
+    """볼드 폰트 등록"""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    candidates = [
+        ("NotoSansKR-Bold", "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"),
+        ("NotoSansKR-Bold", "/usr/share/fonts/noto-cjk/NotoSansCJKkr-Bold.otf"),
+        ("MalgunGothicBold", "C:/Windows/Fonts/malgunbd.ttf"),
+        ("NanumGothicBold",  "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+    ]
+    for fid, fpath in candidates:
+        if os.path.exists(fpath):
+            try:
+                pdfmetrics.registerFont(TTFont(fid, fpath))
+                return fid
+            except Exception:
+                continue
+    return _hy_font()
 
 
 def _out_dir(sub: str) -> str:
@@ -1336,15 +1372,12 @@ def _out_dir(sub: str) -> str:
     return path
 
 
-# ── E-1: 음식물 견적서 PDF 생성 ────────────────────────────
+# ── E-1: 음식물 견적서 PDF (원본 레이아웃 완전 재현) ──────────
 def generate_estimate_pdf(school_name: str, school_biz_no: str,
                           volume_l: float, unit_price: int,
                           contract_period: str,
                           year: str = None) -> str:
-    """
-    음식물 견적서 PDF 생성
-    반환: 저장된 PDF 경로
-    """
+    """음식물 견적서 PDF — 원본 PDF(음식물견적서.pdf) 레이아웃 100% 재현"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units    import mm
     from reportlab.lib          import colors
@@ -1353,168 +1386,181 @@ def generate_estimate_pdf(school_name: str, school_biz_no: str,
                                         Spacer, HRFlowable)
     from reportlab.lib.styles   import ParagraphStyle
 
-    FONT = _hy_font()
+    FONT  = _hy_font()
+    FONTB = _hy_font_bold()
     today = date.today()
-    yr    = year or str(today.year)[2:]          # "26"
-    supply_amount = int(volume_l * unit_price) if volume_l else unit_price
+    yr    = year or str(today.year)[2:]
+    supply_amount = int(volume_l * unit_price) if volume_l else 0
 
     out   = _out_dir("estimates_pdf")
     fname = f"음식물견적서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
     fpath = os.path.join(out, fname)
 
-    def ps(name, size, align=0, bold=False, color=colors.black):
-        w = f"<b>" if bold else ""
-        return ParagraphStyle(name, fontName=FONT, fontSize=size,
-                               alignment=align, leading=size*1.55,
-                               textColor=color, spaceAfter=2)
+    def ps(name, size, align=0, bold=False, color=colors.black, leading_mult=1.5):
+        fn = FONTB if bold else FONT
+        return ParagraphStyle(name, fontName=fn, fontSize=size,
+                               alignment=align, leading=size * leading_mult,
+                               textColor=color, spaceAfter=1)
 
-    doc   = SimpleDocTemplate(fpath, pagesize=A4,
-                               leftMargin=18*mm, rightMargin=18*mm,
-                               topMargin=20*mm, bottomMargin=18*mm)
+    doc = SimpleDocTemplate(fpath, pagesize=A4,
+                             leftMargin=18*mm, rightMargin=18*mm,
+                             topMargin=18*mm, bottomMargin=15*mm)
     story = []
+    W = A4[0] - 36*mm  # 유효 너비
 
-    # 제목
-    story.append(Paragraph(
-        "<b>음식폐기물 처리비용 견적서</b>",
-        ps("t", 18, align=1)
-    ))
-    story.append(Spacer(1, 5*mm))
+    # ① 제목
+    story.append(Paragraph("음식폐기물 처리비용 견적서",
+                            ps("title", 20, align=1, bold=True)))
+    story.append(Spacer(1, 6*mm))
 
-    # 상단 2단 정보 테이블 (고객 | 공급자)
-    left_data = [
-        [Paragraph("<b>고객명</b>", ps("h",10)), Paragraph(f"<b>{school_name}</b>", ps("v",12))],
-        [Paragraph("<b>견적일</b>", ps("h",10)), Paragraph(f"{yr}.{today.month:02d}.{today.day:02d}", ps("v",10))],
+    # ② 상단 2단 — 고객정보(좌) | 공급자정보(우)
+    cell_s = ps("cell", 9)
+    cell_b = ps("cellb", 9, bold=True)
+    left_col = [
+        [Paragraph("고  객  명", ps("lh", 9, align=1)),
+         Paragraph(f"<b>{school_name}</b>", ps("lv", 12, align=1, bold=True))],
+        [Paragraph("견  적  일", ps("lh", 9, align=1)),
+         Paragraph(f"{yr}.{today.month:02d}.{today.day:02d}",
+                   ps("lv2", 9, align=1))],
     ]
-    right_data = [
-        ["사업자등록번호", HY["biz_no"],  "허가번호", HY["permit_no"]],
-        ["상호",          HY["name"],     "대표자",   HY["ceo"]],
-        ["주소",          HY["address"],  "",         ""],
-        ["업태",          HY["biz_type"], "업종",     HY["biz_item"]],
-    ]
-
-    # 공급자 박스 표
-    sup_tbl = Table(right_data, colWidths=[22*mm, 52*mm, 18*mm, 40*mm])
-    sup_tbl.setStyle(TableStyle([
-        ("FONTNAME",  (0,0), (-1,-1), FONT),
-        ("FONTSIZE",  (0,0), (-1,-1), 8),
-        ("BACKGROUND",(0,0), (0,-1), colors.HexColor("#f0f0f0")),
-        ("BACKGROUND",(2,0), (2,-1), colors.HexColor("#f0f0f0")),
-        ("GRID",      (0,0), (-1,-1), 0.3, colors.grey),
-        ("VALIGN",    (0,0), (-1,-1), "MIDDLE"),
-        ("ALIGN",     (0,0), (0,-1), "CENTER"),
-        ("ALIGN",     (2,0), (2,-1), "CENTER"),
-        ("SPAN",      (1,2), (3,2)),   # 주소 병합
-        ("ROWHEIGHT", (0,0), (-1,-1), 7*mm),
-    ]))
-
-    hdr_tbl = Table(
-        [[Paragraph(f"<b>고객명</b>", ps("h",10)), Paragraph(f"<b>{school_name}</b>", ps("hv",12,bold=True)),
-          Paragraph("<b>공급자</b>", ps("h",10)), sup_tbl]],
-        colWidths=[18*mm, 42*mm, 18*mm, None]
-    )
-    hdr_tbl.setStyle(TableStyle([
-        ("FONTNAME",  (0,0), (-1,-1), FONT),
-        ("BOX",       (0,0), (1,-1), 0.5, colors.grey),
-        ("BOX",       (2,0), (3,-1), 0.5, colors.grey),
-        ("ALIGN",     (0,0), (0,-1), "CENTER"),
-        ("ALIGN",     (2,0), (2,-1), "CENTER"),
-        ("VALIGN",    (0,0), (-1,-1), "MIDDLE"),
-        ("BACKGROUND",(0,0), (0,-1), colors.HexColor("#f0f0f0")),
-        ("BACKGROUND",(2,0), (2,-1), colors.HexColor("#f0f0f0")),
-        ("ROWHEIGHT", (0,0), (-1,-1), 10*mm),
-    ]))
-    story.append(hdr_tbl)
-    story.append(Spacer(1, 4*mm))
-
-    # 계약기간 행
-    story.append(Paragraph(
-        f"<b>{yr}년도 음식물류폐기물견적서</b>　　　계약기간: {contract_period}",
-        ps("cp", 10)
-    ))
-    story.append(Spacer(1, 2*mm))
-
-    # 공급가액 합계 행
-    total_str = f"{supply_amount:,}" if volume_l else "-"
-    story.append(Table(
-        [["공급가액 합계", total_str]],
-        colWidths=[40*mm, None]
-    ))
-    story.append(Spacer(1, 2*mm))
-
-    # 품목 명세 테이블
-    item_header = ["품  명", "규격", "수량", "단가(원)", "공급가액", "비고"]
-    item_rows   = [
-        ["음식폐기물수거운반처리", "L(리터)",
-         f"{volume_l:,.0f}" if volume_l else "",
-         f"{unit_price:,}", f"{supply_amount:,}", "면세"],
-    ]
-    # 빈 행 6개 (추가 품목용)
-    for _ in range(6):
-        item_rows.append(["", "", "", "", "", ""])
-    item_rows.append(["합  계", "", "", "", f"{supply_amount:,}", ""])
-
-    item_tbl = Table(
-        [item_header] + item_rows,
-        colWidths=[55*mm, 22*mm, 22*mm, 25*mm, 28*mm, 18*mm]
-    )
-    item_tbl.setStyle(TableStyle([
-        ("FONTNAME",       (0,0), (-1,-1), FONT),
-        ("FONTSIZE",       (0,0), (-1,-1), 9),
-        ("BACKGROUND",     (0,0), (-1, 0), colors.HexColor("#1a73e8")),
-        ("TEXTCOLOR",      (0,0), (-1, 0), colors.white),
-        ("ALIGN",          (0,0), (-1,-1), "CENTER"),
-        ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
-        ("GRID",           (0,0), (-1,-1), 0.3, colors.grey),
-        ("ROWBACKGROUNDS", (0,1), (-1,-2),
-         [colors.white, colors.HexColor("#f8f8f8")]),
-        ("BACKGROUND",     (0,-1), (-1,-1), colors.HexColor("#e8e8e8")),
-        ("FONTSIZE",       (0,-1), (-1,-1), 10),
-        ("ROWHEIGHT",      (0,0), (-1,-1), 8*mm),
-    ]))
-    story.append(item_tbl)
-    story.append(Spacer(1, 4*mm))
-
-    # 특기사항
-    notes = [
-        "1. 음식물쓰레기수거용기는 수집운반업체(하영자원)에서 부담한다.",
-        "2. 음식물쓰레기수거 때에 배출자는 수집운반업체가 수거를 원활히 할 수 있게 해야한다.",
-        "3. 천재지변(눈,비)으로 인하여 수거를 할 수 없을 경우 수집운반업체는 배출자에게 "
-           "지체없이 통보하고 수거 가능일자를 협의할 수 있다.",
-    ]
-    note_tbl = Table(
-        [["특기사항", "\n".join(notes)]],
-        colWidths=[18*mm, None]
-    )
-    note_tbl.setStyle(TableStyle([
+    left_tbl = Table(left_col, colWidths=[22*mm, 38*mm],
+                     rowHeights=[13*mm, 10*mm])
+    left_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
-        ("FONTSIZE",   (0,0), (-1,-1), 8),
-        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f5f5f5")),
         ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
         ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
-        ("VALIGN",     (0,0), (-1,-1), "TOP"),
-        ("ALIGN",      (0,0), (0,-1), "CENTER"),
-        ("ROWHEIGHT",  (0,0), (-1,-1), 18*mm),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN",      (0,0), (0,-1),  "CENTER"),
     ]))
-    story.append(note_tbl)
-    story.append(Spacer(1, 3*mm))
 
-    # 연락처 행
-    contact_tbl = Table(
-        [["연락처", HY["tel"], "FAX", HY["fax"], "이메일", HY["email"], "담당자", HY["ceo"]]],
-        colWidths=[15*mm, 28*mm, 10*mm, 28*mm, 15*mm, 48*mm, 15*mm, 15*mm]
-    )
-    contact_tbl.setStyle(TableStyle([
+    right_data = [
+        ["사업자등록번호", HY["biz_no"],   "허가번호", HY["permit_no"]],
+        ["상  호",         HY["name"],      "대  표  자", HY["ceo"]],
+        ["주  소",         HY["address"],   "",          ""],
+        ["업  태",         HY["biz_type"],  "업  종",  HY["biz_item"]],
+    ]
+    right_tbl = Table(right_data, colWidths=[20*mm, 50*mm, 18*mm, 38*mm])
+    right_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
         ("FONTSIZE",   (0,0), (-1,-1), 8),
         ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
         ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#f0f0f0")),
-        ("BACKGROUND", (4,0), (4,-1), colors.HexColor("#f0f0f0")),
-        ("BACKGROUND", (6,0), (6,-1), colors.HexColor("#f0f0f0")),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN",      (0,0), (0,-1), "CENTER"),
+        ("ALIGN",      (2,0), (2,-1), "CENTER"),
+        ("SPAN",       (1,2), (3,2)),
+    ]))
+
+    top_tbl = Table([[left_tbl, right_tbl]],
+                    colWidths=[62*mm, W - 62*mm])
+    top_tbl.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP")]))
+    story.append(top_tbl)
+    story.append(Spacer(1, 3*mm))
+
+    # ③ 연도 부제
+    story.append(Paragraph(f"<b>{yr}년도 음식물류폐기물견적서</b>",
+                            ps("sub", 10, align=1, bold=True)))
+    story.append(Spacer(1, 3*mm))
+
+    # ④ 공급가액 합계 행
+    sum_w = [55*mm, W - 55*mm]
+    sum_tbl = Table([
+        [Paragraph("<b>공급가액 합계</b>", ps("sh", 10, bold=True)),
+         Paragraph(f"<b>{supply_amount:,}</b>" if supply_amount else "",
+                   ps("sv", 10, bold=True))]
+    ], colWidths=sum_w, rowHeights=10*mm)
+    sum_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("BACKGROUND", (0,0), (0,0), colors.HexColor("#d9e1f2")),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN",      (0,0), (0,0), "CENTER"),
+    ]))
+    story.append(sum_tbl)
+    story.append(Spacer(1, 1*mm))
+
+    # ⑤ 품목 테이블 헤더 + 데이터 행 12줄 + 합계
+    h_style = TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 9),
+        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#e8eaf6")),
+        ("BACKGROUND", (0,-1),(-1,-1), colors.HexColor("#f5f5f5")),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.lightgrey),
+        ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+    ])
+    col_w = [55*mm, 22*mm, 20*mm, 22*mm, 30*mm, W-149*mm]
+    # 헤더
+    header = [["품  명", "규  격", "수  량", "단가(원)", "공급가액", "비  고"]]
+    # 데이터: 1번째 행만 채움
+    data_row1 = ["음식폐기물수거운반처리",
+                 "L(리터)",
+                 f"{volume_l:,.0f}" if volume_l else "",
+                 f"{unit_price:,}",
+                 f"{supply_amount:,}" if supply_amount else f"{unit_price}",
+                 "면세"]
+    rows = header + [data_row1] + [["", "", "", "", "", ""]]*11
+    # 합계 행
+    rows.append([Paragraph("<b>합  계</b>", ps("tot", 9, bold=True, align=1)),
+                 "", "",
+                 Paragraph(f"<b>{supply_amount:,}</b>" if supply_amount else "",
+                            ps("tv", 9, bold=True, align=1)),
+                 Paragraph(f"<b>{supply_amount:,}</b>" if supply_amount else "",
+                            ps("tv2", 9, bold=True, align=1)),
+                 ""])
+    item_tbl = Table(rows, colWidths=col_w, rowHeights=[8*mm] + [7*mm]*12 + [8*mm])
+    item_tbl.setStyle(h_style)
+    story.append(item_tbl)
+    story.append(Spacer(1, 4*mm))
+
+    # ⑥ 특기사항
+    note_data = [
+        [Paragraph("<b>특기사항</b>", ps("nk", 9, align=1, bold=True)),
+         Paragraph(
+             "1. 음식물쓰레기수거용기는 수집운반업체(하영자원)에서 부담한다.<br/>"
+             "2. 음식물쓰레기수거 때에 배출자는 수집운반업체가 수거를 원활히 할 수 있게 해야한다.<br/>"
+             "3. 천재지변(눈,비)으로 인하여 수거를 할 수 없을 경우 수집운반업체는 배출자에게 지체없이 통보하고"
+             " 수거 가능일자를 협의할 수 있다.",
+             ps("nv", 8, leading_mult=1.6))]
+    ]
+    note_tbl = Table(note_data, colWidths=[20*mm, W-20*mm], rowHeights=22*mm)
+    note_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("VALIGN",     (0,0), (-1,-1), "TOP"),
+        ("ALIGN",      (0,0), (0,0),   "CENTER"),
+        ("TOPPADDING", (0,0), (-1,-1), 3),
+        ("LEFTPADDING",(1,0), (1,0),   4),
+    ]))
+    story.append(note_tbl)
+    story.append(Spacer(1, 3*mm))
+
+    # ⑦ 연락처 하단
+    contact_data = [[
+        "연락처", HY["tel"],
+        "FAX",    HY["fax"],
+        "이메일", HY["email"],
+        "담당자", f"{HY['ceo']}\n{HY['mobile']}"
+    ]]
+    ct_w = [16*mm, 28*mm, 12*mm, 28*mm, 16*mm, 40*mm, 16*mm, W-156*mm]
+    contact_tbl = Table(contact_data, colWidths=ct_w, rowHeights=12*mm)
+    contact_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 8),
+        ("BACKGROUND", (0,0), (0,0), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (2,0), (2,0), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (4,0), (4,0), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (6,0), (6,0), colors.HexColor("#f0f0f0")),
         ("BOX",        (0,0), (-1,-1), 0.5, colors.grey),
         ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
         ("ALIGN",      (0,0), (-1,-1), "CENTER"),
         ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
-        ("ROWHEIGHT",  (0,0), (-1,-1), 7*mm),
     ]))
     story.append(contact_tbl)
 
@@ -1522,7 +1568,7 @@ def generate_estimate_pdf(school_name: str, school_biz_no: str,
     return fpath
 
 
-# ── E-2a: 음식물류폐기물 위수탁계약서 PDF ──────────────────
+# ── E-2a: 음식물류폐기물 위수탁계약서 (HWP 원본 완전 재현) ───
 def generate_contract_doc_pdf(school_name: str, school_biz_no: str,
                                school_addr: str, school_tel: str,
                                start_date: str, end_date: str,
@@ -1530,125 +1576,151 @@ def generate_contract_doc_pdf(school_name: str, school_biz_no: str,
                                volume_str: str = "",
                                unit_price: int = 180,
                                contract_amount: str = "") -> str:
-    """
-    폐기물 위수탁 운반 처리 계약서 PDF 생성
-    hwp 원본(음식물류폐기물_위수탁계약서1.hwp) 레이아웃 기준
-    """
+    """폐기물 위수탁 운반 처리 계약서 — HWP 원본 구조 100% 재현"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units    import mm
     from reportlab.lib          import colors
     from reportlab.platypus     import (SimpleDocTemplate, Table,
-                                        TableStyle, Paragraph, Spacer)
+                                        TableStyle, Paragraph, Spacer,
+                                        HRFlowable)
     from reportlab.lib.styles   import ParagraphStyle
 
     FONT  = _hy_font()
+    FONTB = _hy_font_bold()
     today = date.today()
     out   = _out_dir("contract_pdf")
     fname = f"위수탁계약서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
     fpath = os.path.join(out, fname)
 
-    def ps(n, sz, align=0, bold=False):
-        return ParagraphStyle(n, fontName=FONT, fontSize=sz,
-                               alignment=align, leading=sz*1.6,
-                               spaceAfter=2)
+    def ps(n, sz, align=0, bold=False, color=colors.black):
+        fn = FONTB if bold else FONT
+        return ParagraphStyle(n, fontName=fn, fontSize=sz,
+                               alignment=align, leading=sz*1.65,
+                               textColor=color, spaceAfter=1)
 
-    doc   = SimpleDocTemplate(fpath, pagesize=A4,
-                               leftMargin=25*mm, rightMargin=25*mm,
-                               topMargin=25*mm, bottomMargin=20*mm)
+    doc = SimpleDocTemplate(fpath, pagesize=A4,
+                             leftMargin=25*mm, rightMargin=25*mm,
+                             topMargin=25*mm, bottomMargin=20*mm)
     story = []
+    W = A4[0] - 50*mm
 
-    # 제목
+    # ① 제목
     story.append(Paragraph(
-        "<b>폐기물 위수탁 운반 처리 계약서(안)</b>",
-        ps("t", 16, align=1)
-    ))
+        "폐기물 위·수탁 운반·처리 계약서(안)",
+        ps("t", 17, align=1, bold=True)))
     story.append(Spacer(1, 8*mm))
 
-    # 계약 기본 정보 목록
-    yr    = str(today.year)[2:]
-    items = [
-        ("1. 계  약  명", f"음식물류폐기물수집,운반 처리"),
+    # ② 계약 기본 항목 1~5
+    yr = str(today.year)[2:]
+    items_top = [
+        ("1. 계    약    명", "음식물류폐기물수집,운반 처리"),
         ("2. 배  출  장  소", school_name),
         ("3. 처  리  장  소", HY["processor"]),
         ("4. 결  제  조  건", "계좌이체"),
-        ("5. 위수탁 계약기간",
+        ("5. 위·수탁 계약기간",
          f"{start_date}부터  {end_date}까지"),
-        ("6. 위수탁 폐기물 및 처리금액", "(단위: 원)"),
+        ("6. 위·수탁 폐기물 및 처리금액", "(단위 : 원)"),
     ]
-    for label, value in items:
-        row_tbl = Table(
-            [[Paragraph(f"<b>{label}</b>", ps("lbl",10)),
-              Paragraph(f": {value}", ps("val",10))]],
-            colWidths=[52*mm, None]
-        )
-        row_tbl.setStyle(TableStyle([
+    for label, value in items_top:
+        row = Table([[
+            Paragraph(f"<b>{label}</b>", ps("lbl", 10, bold=True)),
+            Paragraph(f": {value}", ps("val", 10))
+        ]], colWidths=[55*mm, W - 55*mm])
+        row.setStyle(TableStyle([
             ("FONTNAME", (0,0), (-1,-1), FONT),
             ("VALIGN",   (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING", (0,0), (-1,-1), 1),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 1),
         ]))
-        story.append(row_tbl)
-        story.append(Spacer(1, 1*mm))
+        story.append(row)
+        story.append(Spacer(1, 1.5*mm))
 
+    # ③ 폐기물 처리금액 표
     story.append(Spacer(1, 3*mm))
-
-    # 폐기물/단가/계약금액 표
-    waste_header = ["폐기물 종류", "물량(예상)", "단가", "계약금액", "처리방법"]
-    waste_row    = [waste_type, volume_str, f"{unit_price}원/L",
-                   contract_amount, "위탁처리"]
-    waste_total  = ["총  계", "", "", contract_amount, ""]
-
-    waste_tbl = Table(
-        [waste_header, waste_row, waste_total],
-        colWidths=[40*mm, 30*mm, 28*mm, 40*mm, 28*mm]
-    )
+    header = [["폐기물 종류", "단 위", "물 량\n(예상배출량)", "단   가",
+               "계 약 금 액", "처 리 방 법",
+               "운반비", "처리비"]]
+    # 데이터 행
+    data_rows = [
+        [waste_type, "kg", volume_str, str(unit_price),
+         contract_amount, "위탁", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+    ]
+    total_row = [Paragraph("<b>총   계</b>",
+                            ps("tot", 9, bold=True, align=1)),
+                 "", "", "",
+                 Paragraph(f"<b>{contract_amount}</b>",
+                            ps("tv", 9, bold=True, align=1)),
+                 "", "", ""]
+    tbl_data = header + data_rows + [total_row]
+    c_w = [28*mm, 14*mm, 28*mm, 20*mm, 28*mm, 22*mm, 15*mm, W-155*mm]
+    waste_tbl = Table(tbl_data, colWidths=c_w,
+                      rowHeights=[10*mm] + [8*mm]*3 + [9*mm])
     waste_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
-        ("FONTSIZE",   (0,0), (-1,-1), 9),
-        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#dddddd")),
-        ("BACKGROUND", (0,-1),(- 1,-1),colors.HexColor("#eeeeee")),
+        ("FONTSIZE",   (0,0), (-1,-1), 8),
+        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#dce6f1")),
+        ("BACKGROUND", (0,-1),(-1,-1), colors.HexColor("#f2f2f2")),
+        ("BOX",        (0,0), (-1,-1), 0.6, colors.black),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
         ("ALIGN",      (0,0), (-1,-1), "CENTER"),
         ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
-        ("GRID",       (0,0), (-1,-1), 0.5, colors.black),
-        ("ROWHEIGHT",  (0,0), (-1,-1), 9*mm),
     ]))
     story.append(waste_tbl)
-    story.append(Spacer(1, 8*mm))
+    story.append(Spacer(1, 5*mm))
 
-    # 계약 체결 문구
-    story.append(Paragraph(
-        "위 계약은 상호 대등한 입장에서 신의성실의 원칙에 따라 계약을 체결하고 "
-        "본 계약상의 내용을 이행 증명하기 위하여 배출자와 수집운반업자가 "
-        "기명날인한 후 각 1부씩 보관하기로 한다.",
-        ps("body", 10)
-    ))
-    story.append(Spacer(1, 3*mm))
-    story.append(Paragraph(
-        f"{yr}년　　{today.month}월　　{today.day}일",
-        ps("dt", 11, align=2)
-    ))
-    story.append(Spacer(1, 8*mm))
+    # ④ 계약 본문
+    body_text = (
+        "위 계약을 증명하기 위하여 계약서 2통을 작성하여 배출자와 수집·운반자가 서명(날인)"
+        "한 후 각 1통씩 보관한다."
+    )
+    story.append(Paragraph(body_text, ps("body", 9)))
+    story.append(Spacer(1, 2*mm))
 
-    # 배출자(갑) / 운반자(을) 서명란
-    sign_data = [
-        ["구분", "배출자 (갑)", "운반자 (을)"],
-        ["상  호", school_name, HY["name"]],
-        ["소재지", school_addr, HY["address"]],
-        ["사업자번호", school_biz_no, HY["biz_no"]],
-        ["전화번호", school_tel, HY["mobile"]],
-        ["허가번호", "", HY["permit_no"]],
-        ["서명(인)", "학교장 (인)", f"{HY['ceo']} (인)"],
+    conditions = [
+        "【계약 조건】",
+        "① 수집ㆍ운반자는 계약기간 중 계약서에 명시된 폐기물을 적정처리 기준에 의거 수집ㆍ운반하여야 한다.",
+        "② 수집ㆍ운반자는 배출자의 동의 없이 수집ㆍ운반업무를 제3자에게 위탁할 수 없다.",
+        "③ 처리금액의 변동이 있을 때에는 상호 협의하여 계약을 변경할 수 있다.",
+        "④ 계약을 해지하고자 할 때에는 상호 30일 전에 서면으로 통보하여야 한다.",
+        "⑤ 이 계약에 명시되지 않은 사항은 관계법령 및 일반 관례에 따른다.",
     ]
-    sign_tbl = Table(sign_data, colWidths=[30*mm, 72*mm, 62*mm])
+    for c in conditions:
+        story.append(Paragraph(c, ps("cond", 8.5,
+                     bold=(c == "【계약 조건】"))))
+        story.append(Spacer(1, 0.8*mm))
+
+    story.append(Spacer(1, 6*mm))
+
+    # ⑤ 계약일
+    story.append(Paragraph(
+        f"{today.year}년  {today.month:02d}월  {today.day:02d}일",
+        ps("date", 11, align=1)))
+    story.append(Spacer(1, 6*mm))
+
+    # ⑥ 서명란 — 배출자(학교) | 수집·운반자(하영자원)
+    sign_data = [
+        ["구  분",  "배 출 자 (학  교)", "수집·운반자 (하영자원)"],
+        ["기관명",  school_name,         HY["name"]],
+        ["대표자",  "",                   HY["ceo"] + "  (인)"],
+        ["사업자번호", school_biz_no,     HY["biz_no"]],
+        ["주  소",  school_addr,          HY["address"]],
+        ["연락처",  school_tel,           HY["tel"]],
+    ]
+    sign_tbl = Table(sign_data, colWidths=[30*mm, 70*mm, 60*mm])
     sign_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
-        ("FONTSIZE",   (0,0), (-1,-1), 10),
+        ("FONTSIZE",   (0,0), (-1,-1), 9),
         ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#1a73e8")),
         ("TEXTCOLOR",  (0,0), (-1, 0), colors.white),
-        ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#f0f0f0")),
+        ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#f0f4ff")),
         ("ALIGN",      (0,0), (-1,-1), "CENTER"),
         ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
         ("GRID",       (0,0), (-1,-1), 0.5, colors.grey),
         ("ROWHEIGHT",  (0,0), (-1,-1), 9*mm),
-        ("ROWHEIGHT",  (0,-1),(- 1,-1),14*mm),
+        ("ROWHEIGHT",  (0,2), (-1, 2), 14*mm),
+        ("FONTNAME",   (0,0), (-1, 0), FONTB),
     ]))
     story.append(sign_tbl)
 
@@ -1656,13 +1728,10 @@ def generate_contract_doc_pdf(school_name: str, school_biz_no: str,
     return fpath
 
 
-# ── E-2b: 계약이행 통합 서약서 PDF ─────────────────────────
+# ── E-2b: 계약이행 통합 서약서 (HWP 원본 완전 재현) ──────────
 def generate_pledge_pdf(school_name: str, unit_price: int,
                         start_date: str, end_date: str) -> str:
-    """
-    계약이행 통합 서약서 PDF 생성
-    (hwp 원본: 계약이행_통합_서약서.hwp 기준)
-    """
+    """계약이행 통합 서약서 — HWP 원본 7개 항목 100% 재현"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units    import mm
     from reportlab.lib          import colors
@@ -1671,137 +1740,338 @@ def generate_pledge_pdf(school_name: str, unit_price: int,
     from reportlab.lib.styles   import ParagraphStyle
 
     FONT  = _hy_font()
+    FONTB = _hy_font_bold()
     today = date.today()
     yr    = str(today.year)[2:]
     out   = _out_dir("contract_pdf")
     fname = f"계약이행서약서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
     fpath = os.path.join(out, fname)
 
-    def ps(n, sz, align=0):
-        return ParagraphStyle(n, fontName=FONT, fontSize=sz,
+    def ps(n, sz, align=0, bold=False, color=colors.black):
+        fn = FONTB if bold else FONT
+        return ParagraphStyle(n, fontName=fn, fontSize=sz,
                                alignment=align, leading=sz*1.6,
-                               spaceAfter=2)
+                               textColor=color, spaceAfter=1)
 
-    doc   = SimpleDocTemplate(fpath, pagesize=A4,
-                               leftMargin=20*mm, rightMargin=20*mm,
-                               topMargin=22*mm, bottomMargin=18*mm)
+    doc = SimpleDocTemplate(fpath, pagesize=A4,
+                             leftMargin=20*mm, rightMargin=20*mm,
+                             topMargin=20*mm, bottomMargin=15*mm)
     story = []
+    W = A4[0] - 40*mm
 
-    # 제목
-    story.append(Paragraph("<b>계약이행 통합 서약서</b>", ps("t",16,align=1)))
-    story.append(Spacer(1, 2*mm))
-    story.append(Paragraph(
-        f"{yr}년 음식물폐기물처리용역",
-        ps("sub", 11, align=1)
-    ))
+    # ① 제목
+    story.append(Paragraph("계약이행 통합 서약서",
+                            ps("t", 17, align=1, bold=True)))
     story.append(Spacer(1, 5*mm))
 
-    # 기본 정보 표
-    info_tbl = Table([
-        ["발주기관", school_name,    "단 가",    f"{unit_price}원/L"],
-        ["계약기간", f"{start_date} ~ {end_date}", "", ""],
-        ["업체명",   HY["name"],      "사업자번호", HY["biz_no"]],
-        ["대표자",   HY["ceo"],       "연락처",     HY["tel"]],
-        ["주  소",   HY["address"],   "",           ""],
-    ], colWidths=[25*mm, 68*mm, 28*mm, 45*mm])
+    # ② 기본 정보 표
+    info_rows = [
+        ["계 약 명", f"{yr}년 음식물폐기물처리용역",
+         "금  액",   f"{unit_price}원/L"],
+        ["발주기관", school_name,
+         "계약기간", f"{start_date} ~ {end_date}"],
+        ["업 체 명", HY["name"],
+         "대 표 자", HY["ceo"] + "  (인)"],
+        ["사업자번호", HY["biz_no"],
+         "연 락 처", HY["tel"]],
+        ["주  소", HY["address"], "", ""],
+    ]
+    info_tbl = Table(info_rows, colWidths=[22*mm, 66*mm, 22*mm, 60*mm])
     info_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
         ("FONTSIZE",   (0,0), (-1,-1), 9),
-        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#e8e8e8")),
-        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#e8e8e8")),
-        ("GRID",       (0,0), (-1,-1), 0.3, colors.grey),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#dce6f1")),
+        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#dce6f1")),
+        ("BOX",        (0,0), (-1,-1), 0.6, colors.black),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
         ("ALIGN",      (0,0), (0,-1), "CENTER"),
         ("ALIGN",      (2,0), (2,-1), "CENTER"),
         ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
-        ("SPAN",       (1,1), (3,1)),   # 계약기간 병합
-        ("SPAN",       (1,4), (3,4)),   # 주소 병합
-        ("ROWHEIGHT",  (0,0), (-1,-1), 8*mm),
+        ("SPAN",       (1,4), (3,4)),
+        ("ROWHEIGHT",  (0,0), (-1,-1), 9*mm),
     ]))
     story.append(info_tbl)
     story.append(Spacer(1, 5*mm))
 
-    # 이행 내용 체크 표
-    checks = [
-        ("계약일반조건",
-         "지방자치단체 입찰 및 계약 집행기준 제9장 계약 일반조건을 준수합니다.",
-         "[✓] 예  [ ] 아니오"),
-        ("수의계약 각서",
-         "귀 기관과 수의계약을 체결함에 있어서 수의계약 배제사유 중 어느 사유에도 "
-         "해당되지 않으며, 차후 이러한 사실이 발견된 경우 계약의 해제·해지 및 "
-         "부정당업자 제재 처분을 받아도 하등의 이유를 제기하지 않겠습니다.",
-         "[✓] 예  [ ] 아니오  [ ] 해당없음"),
-        ("수의계약 체결 제한 여부",
-         "발주기관의 소속 고위공직자 등 이해충돌 방지법 해당 여부 확인.\n"
-         "본인은 해당 없음을 확인합니다.",
-         "[ ] 예  [ ] 아니오  [✓] 해당없음"),
-        ("청렴계약 이행서약",
-         "본 계약과 관련하여 직·간접적으로 뇌물수수, 입찰 및 계약 방해 등 "
-         "부정행위를 하지 않겠으며, 위반 시 계약해지 등 제재를 감수합니다.",
-         "[✓] 예  [ ] 아니오"),
-        ("중대재해 예방점검",
-         "「중대재해 처벌 등에 관한 법률」에 따라 안전보건 관리체계를 구축하고 "
-         "재해 예방에 최선을 다하겠습니다.",
-         "[✓] 예  [ ] 아니오"),
+    # ③ 이행 내용 체크 표 — 원본 7개 항목 완전 재현
+    chk_header = [["순", "구  분", "이 행 내 용 (세부내용)", "확인"]]
+
+    chk_items = [
+        ("1", "계약일반조건",
+         "상기 본인(법인)은 「지방자치단체 입찰 및 계약 집행기준」 제9장\n계약 일반조건을 준수합니다.",
+         "[✓] 예"),
+        ("2", "수의계약\n각서",
+         "귀 기관과 수의계약을 체결함에 있어서 [붙임1] 수의계약 배제사유 중 어느 사유에도\n"
+         "해당되지 않으며 차후에 이러한 사실이 발견된 경우 계약의 해제·해지 및 부정당업자\n"
+         "제재 처분을 받아도 하등의 이유를 제기하지 않겠습니다.\n"
+         "[붙임1] 수의계약 배제사유 1부",
+         "[✓] 예"),
+        ("3", "수의계약\n체결 제한\n여부\n확인서",
+         "①발주기관 소속 고위공직자, 배우자, 직계존속·비속에 해당하는가?\n"
+         "  → [  ] 예  [  ] 아니오  [✓] 해당없음\n"
+         "②계약 업무 담당 공직자, 배우자, 직계존속·비속에 해당하는가?\n"
+         "  → [  ] 예  [  ] 아니오  [✓] 해당없음\n"
+         "③감독기관 소속 고위공직자, 배우자, 직계존속·비속에 해당하는가?\n"
+         "  → [  ] 예  [  ] 아니오  [✓] 해당없음\n"
+         "④모회사 소속 고위공직자, 배우자, 직계존속·비속에 해당하는가?\n"
+         "  → [  ] 예  [  ] 아니오  [✓] 해당없음\n"
+         "⑤상임위원회 위원의 국회의원, 배우자, 직계존속에 해당하는가?\n"
+         "  → [  ] 예  [  ] 아니오  [✓] 해당없음",
+         "해당없음"),
+        ("4", "청렴\n서약서",
+         "계약의 체결·이행과정에서 금품·향응·편의 등을 제공하거나 요구하지 않을 것이며,\n"
+         "이를 위반할 경우 발생하는 모든 법적 책임을 감수하겠습니다.",
+         "[✓] 예"),
+        ("5", "개인정보\n처리 동의",
+         "입찰·계약 업무 처리를 위한 개인정보(성명, 사업자번호, 연락처 등)의 수집·이용에\n"
+         "동의합니다.",
+         "[✓] 동의"),
+        ("6", "중대재해\n처벌법\n준수\n서약",
+         "「중대재해 처벌 등에 관한 법률」 및 「산업안전보건법」에 따라 안전·보건\n"
+         "조치를 성실히 이행할 것을 서약합니다.\n"
+         "(붙임: 공사/용역 안전보건 점검표 제출 대상)",
+         "[✓] 예"),
+        ("7", "계약이행\n능력\n확인서",
+         "상기 계약의 이행에 필요한 인력·장비·자격을 보유하고 있음을 확인하며,\n"
+         "계약기간 내 성실하게 용역을 수행할 것을 서약합니다.\n"
+         f"[폐기물수집운반업 허가번호: {HY['permit_no']}]",
+         "[✓] 확인"),
     ]
 
-    chk_header = [
-        Paragraph("<b>이행 내용</b>", ps("h",9,align=1)),
-        Paragraph("<b>세부내용</b>",  ps("h",9,align=1)),
-        Paragraph("<b>확인</b>",      ps("h",9,align=1)),
-    ]
-    chk_rows = [[
-        Paragraph(c[0], ps(f"cl{i}", 9, align=1)),
-        Paragraph(c[1], ps(f"cv{i}", 8)),
-        Paragraph(c[2], ps(f"cc{i}", 8, align=1)),
-    ] for i, c in enumerate(checks)]
+    chk_rows = chk_header.copy()
+    for num, cat, content, result in chk_items:
+        chk_rows.append([
+            Paragraph(num,     ps(f"n{num}", 8, align=1)),
+            Paragraph(cat,     ps(f"c{num}", 8, align=1)),
+            Paragraph(content.replace('\n', '<br/>'),
+                      ps(f"d{num}", 7.5, leading_mult=1.55)),
+            Paragraph(result,  ps(f"r{num}", 8, align=1)),
+        ])
 
-    chk_tbl = Table(
-        [chk_header] + chk_rows,
-        colWidths=[35*mm, 100*mm, 31*mm]
-    )
+    # 행 높이: 헤더 8mm, 나머지 각 항목 가변
+    row_heights = [8*mm, 12*mm, 22*mm, 38*mm, 12*mm, 10*mm, 16*mm, 16*mm]
+    chk_tbl = Table(chk_rows,
+                    colWidths=[10*mm, 22*mm, W - 52*mm, 20*mm],
+                    rowHeights=row_heights)
     chk_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 8),
         ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#1a73e8")),
         ("TEXTCOLOR",  (0,0), (-1, 0), colors.white),
-        ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#f0f4ff")),
-        ("ALIGN",      (0,0), (-1, 0), "CENTER"),
-        ("ALIGN",      (0,1), (0,-1), "CENTER"),
+        ("FONTNAME",   (0,0), (-1, 0), FONTB),
+        ("BOX",        (0,0), (-1,-1), 0.6, colors.black),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("ALIGN",      (0,0), (0,-1), "CENTER"),
+        ("ALIGN",      (1,0), (1,-1), "CENTER"),
+        ("ALIGN",      (3,0), (3,-1), "CENTER"),
         ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
-        ("GRID",       (0,0), (-1,-1), 0.4, colors.grey),
-        ("ROWHEIGHT",  (0,0), (-1,-1), 16*mm),
+        ("TOPPADDING", (2,1), (2,-1), 3),
+        ("LEFTPADDING",(2,1), (2,-1), 4),
     ]))
     story.append(chk_tbl)
     story.append(Spacer(1, 8*mm))
 
-    # 서명란
+    # ④ 날짜
     story.append(Paragraph(
-        f"위와 같이 서약합니다.　　　　　{today.strftime('%Y년 %m월 %d일')}",
-        ps("sd", 10, align=2)
-    ))
+        f"{today.year}년  {today.month:02d}월  {today.day:02d}일",
+        ps("date", 10, align=1)))
+    story.append(Spacer(1, 4*mm))
+
+    # ⑤ 서명란
+    sign_rows = [
+        ["발주기관", school_name, "업체명", HY["name"]],
+        ["기관장",   "",          "대표자", HY["ceo"] + "  (인)"],
+    ]
+    sign_tbl = Table(sign_rows, colWidths=[22*mm, 68*mm, 22*mm, 58*mm])
+    sign_tbl.setStyle(TableStyle([
+        ("FONTNAME",  (0,0), (-1,-1), FONT),
+        ("FONTSIZE",  (0,0), (-1,-1), 9),
+        ("BACKGROUND",(0,0),(0,-1), colors.HexColor("#eeeeee")),
+        ("BACKGROUND",(2,0),(2,-1), colors.HexColor("#eeeeee")),
+        ("BOX",       (0,0),(-1,-1), 0.5, colors.grey),
+        ("INNERGRID", (0,0),(-1,-1), 0.3, colors.grey),
+        ("ALIGN",     (0,0),(0,-1), "CENTER"),
+        ("ALIGN",     (2,0),(2,-1), "CENTER"),
+        ("VALIGN",    (0,0),(-1,-1), "MIDDLE"),
+        ("ROWHEIGHT", (0,0),(-1,-1), 12*mm),
+    ]))
+    story.append(sign_tbl)
+    story.append(Spacer(1, 4*mm))
+    story.append(Paragraph(
+        f"{school_name}장  귀중",
+        ps("rcp", 10, align=2)))
+
+    doc.build(story)
+    return fpath
+
+
+# ── E-2c: 중대재해 안전보건 점검표 PDF (신규 추가) ──────────
+def generate_safety_check_pdf(school_name: str,
+                               check_date: str = "") -> str:
+    """공사(용역) 안전보건 점검표 — HWP 원본 7개 항목 완전 재현"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units    import mm
+    from reportlab.lib          import colors
+    from reportlab.platypus     import (SimpleDocTemplate, Table,
+                                        TableStyle, Paragraph, Spacer)
+    from reportlab.lib.styles   import ParagraphStyle
+
+    FONT  = _hy_font()
+    FONTB = _hy_font_bold()
+    today = date.today()
+    chk_dt = check_date or f"{today.year}.   .   ."
+    out    = _out_dir("contract_pdf")
+    fname  = f"안전보건점검표_{school_name}_{today.strftime('%Y%m%d')}.pdf"
+    fpath  = os.path.join(out, fname)
+
+    def ps(n, sz, align=0, bold=False):
+        fn = FONTB if bold else FONT
+        return ParagraphStyle(n, fontName=fn, fontSize=sz,
+                               alignment=align, leading=sz*1.6,
+                               spaceAfter=1)
+
+    doc = SimpleDocTemplate(fpath, pagesize=A4,
+                             leftMargin=18*mm, rightMargin=18*mm,
+                             topMargin=18*mm, bottomMargin=15*mm)
+    story = []
+    W = A4[0] - 36*mm
+
+    # ① 보관 안내
+    story.append(Paragraph(
+        "붙임4   공사(용역) 안전보건 점검표",
+        ps("title", 14, align=1, bold=True)))
+    story.append(Paragraph(
+        "[학교(기관), 교육(지원)청에서 확인하여 자체 보관]",
+        ps("sub", 9, align=1)))
+    story.append(Spacer(1, 4*mm))
+
+    # ② 기본 정보
+    story.append(Paragraph(
+        f"<b>공사(용역) 안전보건 점검표</b>",
+        ps("hd", 11, bold=True)))
+    info_rows = [
+        [f"■ 기  관  명: {school_name}",
+         f"■ 확  인  자: 주무관              (서명)",
+         f"■ 점검일자: {chk_dt}"],
+    ]
+    info_tbl = Table(info_rows, colWidths=[W/3, W/3, W/3])
+    info_tbl.setStyle(TableStyle([
+        ("FONTNAME", (0,0), (-1,-1), FONT),
+        ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("VALIGN",   (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING", (0,0),(-1,-1), 2),
+    ]))
+    story.append(info_tbl)
+
+    # ③ 결재란
+    sign_rows = [["결재", "담  당", "행정실장", "학 교 장"],
+                 ["", "", "", ""]]
+    sign_tbl = Table(sign_rows, colWidths=[18*mm, 28*mm, 28*mm, 28*mm],
+                     rowHeights=[7*mm, 14*mm])
+    sign_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("FONTSIZE",   (0,0), (-1,-1), 8),
+        ("BOX",        (0,0), (-1,-1), 0.5, colors.black),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f5f5f5")),
+    ]))
+    story.append(Spacer(1, 2*mm))
+    story.append(sign_tbl)
+    story.append(Spacer(1, 4*mm))
+
+    # ④ 점검 항목 7개
+    chk_header = [["번호", "점  검  내  용", "확인결과\n예", "아니오"]]
+    check_items = [
+        ("1",
+         "과업지시서(또는 특수조건) 또는 계약서에 '안전관리 및 예방조치 후 작업' 실시 내용\n"
+         "포함하였는지 확인  ※계약서가 없을 경우 본 점검표로 갈음",
+         "✓", ""),
+        ("2",
+         "공사(용역)업체에서 근로자에 대한 안전보건교육 실시하였는지 확인",
+         "✓", ""),
+        ("3",
+         "공사(용역)업체에 안전보호구(안전모, 안전대, 안전화 등)를\n"
+         "착용하고 작업하도록 주지하였는지 확인 (필요한 경우)",
+         "✓", ""),
+        ("4",
+         "공사(용역)업체에 위험사항(위험성평가 등)과 기계·기구·설비의 안전점검에 관한 사항,\n"
+         "공사 전 유의사항에 대해 안내하여 주었는지 확인",
+         "✓", ""),
+        ("5",
+         "공사(용역)업체에 최초 학교(기관)의 현장(업체 근로자가 작업하는 공간)으로 이동할\n"
+         "때나 현장 이외 장소 이동 시 교육행정실(담당자)의 안내를 받도록 주지시켰는지 확인",
+         "✓", ""),
+        ("6",
+         "고소, 전기, 화기, 밀폐공간 등의 작업 시 공사(용역)업체에서 (붙임4-2~5)\n"
+         "유해·위험 작업 시 안전보건 점검표를 제출하였는지 여부",
+         "✓", ""),
+        ("7",
+         "안전·보건에 관한 종사자의 의견청취를 하였는지 여부\n"
+         "- 의견제시사항: 없음",
+         "✓", ""),
+    ]
+    rows = chk_header.copy()
+    for num, content, yes, no in check_items:
+        rows.append([
+            Paragraph(num, ps(f"n{num}", 9, align=1)),
+            Paragraph(content.replace('\n', '<br/>'), ps(f"c{num}", 8.5)),
+            Paragraph(yes, ps(f"y{num}", 10, align=1, bold=True)),
+            Paragraph(no,  ps(f"no{num}", 10, align=1)),
+        ])
+    row_h = [8*mm, 16*mm, 8*mm, 12*mm, 8*mm, 12*mm, 12*mm, 12*mm, 10*mm]
+    chk_tbl = Table(rows, colWidths=[12*mm, W-42*mm, 15*mm, 15*mm],
+                    rowHeights=row_h)
+    chk_tbl.setStyle(TableStyle([
+        ("FONTNAME",   (0,0), (-1,-1), FONT),
+        ("BACKGROUND", (0,0), (-1, 0), colors.HexColor("#1a73e8")),
+        ("TEXTCOLOR",  (0,0), (-1, 0), colors.white),
+        ("FONTNAME",   (0,0), (-1, 0), FONTB),
+        ("BOX",        (0,0), (-1,-1), 0.6, colors.black),
+        ("INNERGRID",  (0,0), (-1,-1), 0.3, colors.grey),
+        ("ALIGN",      (0,0), (0,-1), "CENTER"),
+        ("ALIGN",      (2,0), (-1,-1), "CENTER"),
+        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING", (1,1), (1,-1), 3),
+        ("LEFTPADDING",(1,1), (1,-1), 4),
+    ]))
+    story.append(chk_tbl)
     story.append(Spacer(1, 5*mm))
 
-    sign_tbl2 = Table([
-        ["업체명", HY["name"],   "사업자번호", HY["biz_no"]],
-        ["대표자", HY["ceo"] + "　　　　　　(인)", "", ""],
-    ], colWidths=[20*mm, 70*mm, 28*mm, 48*mm])
-    sign_tbl2.setStyle(TableStyle([
+    # ⑤ 공사업체 확인서
+    story.append(Paragraph("공사업체 확인서", ps("cfm", 11, bold=True)))
+    story.append(Spacer(1, 2*mm))
+    confirm_text = (
+        "위 점검사항에 대해 안내를 받았으며 산업안전보건법규에 따라 작업자에게 "
+        "안전보건보호구 지급 및 안전수칙을 준수하여 작업할 것을 확인합니다."
+    )
+    story.append(Paragraph(confirm_text, ps("ct", 9)))
+    story.append(Spacer(1, 4*mm))
+
+    cfm_rows = [
+        ["소속(회사)", HY["name"],    "공사(용역)업체 책임자", HY["ceo"]],
+        ["",           "",             "서  명",                "(서명)"],
+    ]
+    cfm_tbl = Table(cfm_rows, colWidths=[24*mm, 50*mm, 38*mm, 58*mm],
+                    rowHeights=[9*mm, 14*mm])
+    cfm_tbl.setStyle(TableStyle([
         ("FONTNAME",   (0,0), (-1,-1), FONT),
-        ("FONTSIZE",   (0,0), (-1,-1), 10),
-        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#eeeeee")),
-        ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#eeeeee")),
-        ("GRID",       (0,0), (-1,-1), 0.4, colors.grey),
-        ("ALIGN",      (0,0), (0,-1), "CENTER"),
-        ("ALIGN",      (2,0), (2,-1), "CENTER"),
-        ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
-        ("SPAN",       (1,1), (3,1)),
-        ("ROWHEIGHT",  (0,0), (-1,-1), 12*mm),
+        ("FONTSIZE",   (0,0), (-1,-1), 9),
+        ("BACKGROUND", (0,0),(0,-1), colors.HexColor("#eeeeee")),
+        ("BACKGROUND", (2,0),(2,-1), colors.HexColor("#eeeeee")),
+        ("BOX",        (0,0),(-1,-1), 0.5, colors.black),
+        ("INNERGRID",  (0,0),(-1,-1), 0.3, colors.grey),
+        ("ALIGN",      (0,0),(-1,-1), "CENTER"),
+        ("VALIGN",     (0,0),(-1,-1), "MIDDLE"),
+        ("SPAN",       (0,0),(0,1)),
+        ("SPAN",       (1,0),(1,1)),
     ]))
-    story.append(sign_tbl2)
+    story.append(cfm_tbl)
     story.append(Spacer(1, 3*mm))
     story.append(Paragraph(
-        f"서초고등학교장 귀중",
-        ps("rcp", 10, align=2)
-    ))
+        "※ (작성대상) 금액에 상관없이 1회성 소규모 수선 등 모든 공사, 용역(각종 유지·보수 용역 포함)",
+        ps("note", 7.5, color=colors.grey)))
 
     doc.build(story)
     return fpath
@@ -1857,6 +2127,11 @@ def generate_contract_package(
         )
     except Exception as e:
         errors["계약이행서약서"] = str(e)
+
+    try:
+        generated["안전보건점검표"] = generate_safety_check_pdf(school_name)
+    except Exception as e:
+        errors["안전보건점검표"] = str(e)
 
     # ② 기존 서류 파일 경로 목록
     try:
