@@ -1746,10 +1746,10 @@ def generate_pledge_pdf(school_name: str, unit_price: int,
     fname = f"계약이행서약서_{school_name}_{today.strftime('%Y%m%d')}.pdf"
     fpath = os.path.join(out, fname)
 
-    def ps(n, sz, align=0, bold=False, color=colors.black):
+    def ps(n, sz, align=0, bold=False, color=colors.black, leading_mult=1.6):
         fn = FONTB if bold else FONT
         return ParagraphStyle(n, fontName=fn, fontSize=sz,
-                               alignment=align, leading=sz*1.6,
+                               alignment=align, leading=sz*leading_mult,
                                textColor=color, spaceAfter=1)
 
     doc = SimpleDocTemplate(fpath, pagesize=A4,
@@ -1923,11 +1923,11 @@ def generate_safety_check_pdf(school_name: str,
     fname  = f"안전보건점검표_{school_name}_{today.strftime('%Y%m%d')}.pdf"
     fpath  = os.path.join(out, fname)
 
-    def ps(n, sz, align=0, bold=False):
+    def ps(n, sz, align=0, bold=False, color=colors.black):
         fn = FONTB if bold else FONT
         return ParagraphStyle(n, fontName=fn, fontSize=sz,
                                alignment=align, leading=sz*1.6,
-                               spaceAfter=1)
+                               textColor=color, spaceAfter=1)
 
     doc = SimpleDocTemplate(fpath, pagesize=A4,
                              leftMargin=18*mm, rightMargin=18*mm,
