@@ -1082,6 +1082,34 @@ def g2b_get_edoc_list() -> list[dict]:
             "송신자ID","수신일자","계약서_상태","계약_시작일","계약_종료일"]
     return [dict(zip(cols, r)) for r in rows]
 
+# ── [신규 1단계] 학교 응답(승인/반려) 처리 헬퍼 ────────────────────
+def school_reply_contract(contract_id: int, new_status: str, reply_memo: str = ""):
+    """학교(행정실)에서 하영자원의 계약 초안에 응답(승인/수정요청)하는 기능"""
+    conn = get_conn()
+    row = conn.execute("SELECT 비고 FROM contract_master WHERE id=?", (contract_id,)).fetchone()
+    current_memo = row[0] if row and row[0] else ""
+
+    # 반려(수정 요청)일 경우 사유를 비고란에 추가 기록
+    if reply_memo:
+        current_memo = f"{current_memo} | [학교응답]: {reply_memo}"
+
+    conn.execute(
+        """UPDATE contract_master SET
+           계약서_상태=?, 비고=?, updated_at=?
+           WHERE id=?""",
+        (new_status, current_memo, datetime.now().strftime("%Y-%m-%d"), contract_id)
+    )
+    
+    # 학교가 '서명완료(승인)'를 누르면, 학교 마스터 정보의 상태도 '계약중'으로 자동 변경
+    if new_status == "서명완료":
+        c_row = conn.execute("SELECT 학교명 FROM contract_master WHERE id=?", (contract_id,)).fetchone()
+        if c_row:
+            conn.execute(
+                "UPDATE school_prices SET 계약_상태='계약중', updated_at=? WHERE 학교명=?",
+                (datetime.now().strftime("%Y-%m-%d"), c_row[0])
+            )
+    conn.commit()
+
 
 # ── [6단계] 담당자 고도화 + 워크플로우 헬퍼 ────────────────────
 
