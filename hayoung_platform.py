@@ -28,22 +28,20 @@ try:
 except ImportError:
     pass
 
-# ── 필수 패키지 자동 설치 (최초 1회) ─────────────────────────
-import subprocess, sys
+# ── 선택 패키지 가용 여부 확인 (Cloud/로컬 공통) ─────────────
+# reportlab, openpyxl 은 requirements.txt 에 명시
+# 없을 경우 PDF/엑셀 기능만 비활성화, 앱 전체는 정상 동작
+try:
+    import reportlab as _rl   # noqa: F401
+    _REPORTLAB_OK = True
+except ImportError:
+    _REPORTLAB_OK = False
 
-def _auto_install(package: str, import_name: str = None):
-    """패키지가 없으면 pip로 자동 설치"""
-    import_name = import_name or package
-    try:
-        __import__(import_name)
-    except ImportError:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", package, "--quiet"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-
-_auto_install("reportlab")
-_auto_install("openpyxl")
+try:
+    import openpyxl as _oxl   # noqa: F401
+    _OPENPYXL_OK = True
+except ImportError:
+    _OPENPYXL_OK = False
 
 _raw_pw        = os.getenv("EXCEL_PASSWORD", "")
 EXCEL_PASSWORD = _raw_pw if _raw_pw else None
