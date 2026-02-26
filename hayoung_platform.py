@@ -1307,21 +1307,25 @@ def create_settlement_excel(settlement: dict, year: int, month: int) -> bytes:
 
 
 def _hy_font() -> str:
-    """Noto Sans KR 우선 → 맑은고딕 → 나눔고딕 순으로 한글 폰트 등록"""
+    """한글 TTF 폰트 등록 — 나눔고딕(Cloud) → 맑은고딕(Windows) 순"""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+
+    # ⚠️ NotoSansCJK(.ttc/.otf)는 PostScript 아웃라인이라 reportlab 로드 불가
+    # Streamlit Cloud: packages.txt에 fonts-nanum 추가로 나눔고딕 TTF 설치
     candidates = [
-        # Noto Sans KR (Streamlit Cloud / Linux)
-        ("NotoSansKR", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
-        ("NotoSansKR", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        ("NotoSansKR", "/usr/share/fonts/noto-cjk/NotoSansCJKkr-Regular.otf"),
-        ("NotoSansKR", "/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf"),
+        # Streamlit Cloud / Ubuntu (fonts-nanum 패키지 설치 후)
+        ("NanumGothic", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+        ("NanumGothic", "/usr/share/fonts/truetype/nanum/NanumGothicRegular.ttf"),
+        # fonts-nanum-extra 경로
+        ("NanumBarunGothic", "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf"),
         # Windows
         ("MalgunGothic", "C:/Windows/Fonts/malgun.ttf"),
         ("NanumGothic",  "C:/Windows/Fonts/NanumGothic.ttf"),
-        # Linux 나눔
-        ("NanumGothic",  "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
-        ("NanumGothic",  "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+        # macOS
+        ("AppleGothic",  "/Library/Fonts/AppleGothic.ttf"),
+        # 기타 Linux 경로
+        ("NanumGothic",  "/usr/share/fonts/nanum/NanumGothic.ttf"),
     ]
     for fid, fpath in candidates:
         if os.path.exists(fpath):
@@ -1330,26 +1334,21 @@ def _hy_font() -> str:
                 return fid
             except Exception:
                 continue
-    # 폰트 없으면 Noto 설치 시도 (Cloud 환경)
-    try:
-        import subprocess, sys
-        subprocess.run([sys.executable, "-m", "pip", "install",
-                        "reportlab[fonts]", "--quiet"],
-                       capture_output=True, timeout=30)
-    except Exception:
-        pass
-    return "Helvetica"
+    return "Helvetica"  # 최후 fallback (한글 깨짐 — packages.txt 확인 필요)
 
 
 def _hy_font_bold() -> str:
-    """볼드 폰트 등록"""
+    """볼드 TTF 폰트 등록"""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     candidates = [
-        ("NotoSansKR-Bold", "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"),
-        ("NotoSansKR-Bold", "/usr/share/fonts/noto-cjk/NotoSansCJKkr-Bold.otf"),
+        # Streamlit Cloud / Ubuntu
+        ("NanumGothicBold", "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+        ("NanumBarunGothicBold", "/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf"),
+        # Windows
         ("MalgunGothicBold", "C:/Windows/Fonts/malgunbd.ttf"),
-        ("NanumGothicBold",  "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+        ("NanumGothicBold",  "C:/Windows/Fonts/NanumGothicBold.ttf"),
+        ("NanumGothicBold",  "/usr/share/fonts/nanum/NanumGothicBold.ttf"),
     ]
     for fid, fpath in candidates:
         if os.path.exists(fpath):
@@ -1358,7 +1357,7 @@ def _hy_font_bold() -> str:
                 return fid
             except Exception:
                 continue
-    return _hy_font()
+    return _hy_font()  # 볼드 없으면 일반으로 대체
 
 
 def _out_dir(sub: str) -> str:
