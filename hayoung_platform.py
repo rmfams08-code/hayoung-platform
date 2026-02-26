@@ -3151,8 +3151,7 @@ with school_tab4:
             st.markdown("### 📩 행정실 전자 계약함")
             st.info("하영자원 본사에서 발송한 계약 서류 초안을 확인하고 응답할 수 있습니다.")
             
-            conn = get_conn()
-            # 현재 로그인한 학교 이름으로 수신된 초안이 있는지 DB에서 찾기
+conn = get_conn()
             pending_contracts = conn.execute(
                 "SELECT id, 계약_시작일, 계약_종료일, 폐기물_종류, 단가, 계약서_상태, 비고 FROM contract_master WHERE 학교명=? AND 계약서_상태 IN ('수신', '반려')",
                 (st.session_state.user_name,)
