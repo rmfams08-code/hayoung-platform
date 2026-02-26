@@ -2985,7 +2985,7 @@ elif role == "🏫 학교 담당자 (행정실)":
         </div>
         """, unsafe_allow_html=True)
 
-       school_tab1, school_tab2, school_tab3, school_tab4, school_tab5 = st.tabs([
+        school_tab1, school_tab2, school_tab3, school_tab4, school_tab5 = st.tabs([
             "📊 수거량 통계", "📅 수거 일정 캘린더 ✨", "🛡️ 안전 현황", "🖨️ 서류 출력", "📩 전자 계약함"
         ])
         
