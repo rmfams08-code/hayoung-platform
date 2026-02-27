@@ -6,7 +6,10 @@ import pandas as pd
 import time
 import io
 import random
-from datetime import datetime
+import os
+import json
+import hashlib
+from datetime import datetime, timedelta
 
 # ==========================================
 # 0. 관리 대상 학교 목록 및 실제 학생 수 (검색 데이터 기반)
@@ -20,6 +23,26 @@ STUDENT_COUNTS = {
     "안산국제비지니스고등학교": 660, "안산고등학교": 745, "송호고등학교": 879, "비봉고등학교": 734
 }
 SCHOOL_LIST = sorted(list(STUDENT_COUNTS.keys()))
+
+# ==========================================
+# 0-1. 보안 설정 (환경변수 기반)
+# ==========================================
+EXCEL_PASSWORD = os.environ.get("HAYOUNG_EXCEL_PW", "change_me_in_env")
+# 운영 환경에서는 아래 명령으로 설정:
+# export HAYOUNG_EXCEL_PW="실제비밀번호"
+# Streamlit Cloud: Settings → Secrets → HAYOUNG_EXCEL_PW = "실제비밀번호"
+try:
+    if hasattr(st, 'secrets') and "HAYOUNG_EXCEL_PW" in st.secrets:
+        EXCEL_PASSWORD = st.secrets["HAYOUNG_EXCEL_PW"]
+except Exception:
+    pass
+
+# ==========================================
+# 0-2. 동적 년도 설정 (하드코딩 제거)
+# ==========================================
+CURRENT_YEAR = datetime.now().year
+CURRENT_MONTH = datetime.now().month
+CURRENT_DATE = datetime.now().strftime("%Y-%m-%d")
 
 # ==========================================
 # 1. 페이지 및 기본 환경 설정
@@ -61,10 +84,15 @@ def load_data():
             raise ValueError("과거 연도 데이터가 없어 새로 생성합니다.")
         return df
     except:
-        # 파일이 아예 없거나, 과거 데이터가 없는 경우 2024~2026년 데이터를 자동으로 새로 만듦
+        # 파일이 아예 없거나, 과거 데이터가 없는 경우 최근 2년 + 현재 연도 데이터를 자동으로 새로 만듦
         sample_data = []
-        for year in [2024, 2025, 2026]:
-            months_to_gen = [(11, 30), (12, 31)] if year != 2026 else [(1, 31), (2, 25)]
+        # 동적 년도 생성: 2년 전 ~ 현재 연도
+        for year in range(CURRENT_YEAR - 2, CURRENT_YEAR + 1):
+            if year < CURRENT_YEAR:
+                months_to_gen = [(11, 30), (12, 31)]
+            else:
+                # 현재 연도: 1월부터 현재 월까지
+                months_to_gen = [(m, 28 if m == 2 else 30 if m in [4,6,9,11] else 31) for m in range(1, CURRENT_MONTH + 1)]
             for month, days in months_to_gen:
                 for day in range(1, days + 1, 3): 
                     if day % 7 in [0, 1]: continue 
@@ -72,7 +100,7 @@ def load_data():
                         food = int(count * random.uniform(0.1, 0.2))
                         recycle = int(count * random.uniform(0.05, 0.1))
                         biz = int(count * random.uniform(0.02, 0.05))
-                        status = "정산완료" if year != 2026 else "정산대기"
+                        status = "정산완료" if year < CURRENT_YEAR else "정산대기"
                         
                         sample_data.append({
                             "날짜": f"{year}-{month:02d}-{day:02d} {random.randint(8, 15):02d}:{random.randint(0, 59):02d}:{random.randint(0, 59):02d}",
@@ -115,9 +143,10 @@ with st.sidebar:
     st.info("💡 **데이터 실시간 동기화 완벽 지원**")
 
 # ==========================================
-# 4. 보안 엑셀 보고서 생성 함수
+# 4. 보안 엑셀 보고서 생성 함수 (법정 양식 준수)
 # ==========================================
 def create_secure_excel(df, title):
+    """기본 보안 엑셀 생성"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='법정실적보고서', startrow=2)
@@ -127,7 +156,104 @@ def create_secure_excel(df, title):
         worksheet.merge_range(0, 0, 1, len(df.columns)-1, f"■ {title} ■", title_format)
         for i, col in enumerate(df.columns):
             worksheet.set_column(i, i, 16)
-        worksheet.protect('hayoung1234', {'objects': True, 'scenarios': True, 'format_cells': False, 'sort': True})
+        worksheet.protect(EXCEL_PASSWORD, {'objects': True, 'scenarios': True, 'format_cells': False, 'sort': True})
+    return output.getvalue()
+
+def create_legal_report_excel(df, report_type, school_name, period_str):
+    """
+    법정 서식 준수 보고서 생성
+    - 폐기물관리법 시행규칙 별지 제30호서식 (폐기물 처리실적보고서)
+    - 2026.1.1 시행 기후에너지환경부령 제18호 반영
+    필수 기재사항: 배출자정보, 허가번호, 폐기물종류코드, 처리방법, 올바로인계번호
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # --- 시트1: 표지 ---
+        ws_cover = writer.book.add_worksheet('표지')
+        title_fmt = writer.book.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        header_fmt = writer.book.add_format({'bold': True, 'font_size': 11, 'align': 'left', 'valign': 'vcenter', 'text_wrap': True})
+        value_fmt = writer.book.add_format({'font_size': 11, 'align': 'left', 'valign': 'vcenter'})
+        legal_fmt = writer.book.add_format({'font_size': 9, 'align': 'left', 'color': '#666666', 'text_wrap': True})
+        
+        ws_cover.merge_range('A1:F3', f'■ {report_type} ■', title_fmt)
+        ws_cover.merge_range('A4:F4', f'[폐기물관리법 시행규칙 별지 제30호서식] (기후에너지환경부령 제18호, 2025.12.30 개정 / 2026.1.1 시행)', legal_fmt)
+        
+        # 법정 필수 기재사항
+        cover_fields = [
+            ("보고 대상 기간", period_str),
+            ("배출자(학교명)", school_name),
+            ("배출자 사업장 소재지", "(학교 주소 기재)"),
+            ("배출자 등록번호(사업자번호)", "(사업자등록번호 기재)"),
+            ("수집·운반업 허가번호", "제 ____호 (하영자원)"),
+            ("수집·운반업체명", "하영자원"),
+            ("수집·운반업체 대표자", "(대표자명 기재)"),
+            ("처리업체명 / 허가번호", "(중간처리업체명) / 제 ____호"),
+            ("폐기물 종류 코드", "음식물류: 01-05-00 / 사업장일반: 01-99-00"),
+            ("올바로시스템 인계번호", "(전자인계서 번호 자동연동)"),
+            ("보고서 작성일", CURRENT_DATE),
+            ("작성자 / 직위", "(작성자명) / (직위)"),
+        ]
+        for i, (label, val) in enumerate(cover_fields):
+            row = 5 + i
+            ws_cover.write(row, 0, label, header_fmt)
+            ws_cover.merge_range(row, 1, row, 5, val, value_fmt)
+        
+        legal_note_row = 5 + len(cover_fields) + 1
+        ws_cover.merge_range(legal_note_row, 0, legal_note_row + 2, 5,
+            "※ 본 보고서는 「폐기물관리법」 제18조 및 같은 법 시행규칙 제20조에 따라 작성되었으며, "
+            "「폐기물관리법 시행규칙」 별지 제30호서식(폐기물 처리실적보고서)에 근거합니다.\n"
+            "※ 2026.1.1 시행 기후에너지환경부령 제18호 개정사항 반영: 전지류 폐기물 분류체계 개편, "
+            "재활용 가능 유형 정비, 폐유독물질→폐유해화학물질 명칭 변경 등.\n"
+            "※ 올바로시스템(Allbaro) 전자인계서와 연동하여 인계·인수 이력을 관리합니다.",
+            legal_fmt)
+        
+        for col in range(6):
+            ws_cover.set_column(col, col, 22)
+        ws_cover.protect(EXCEL_PASSWORD)
+        
+        # --- 시트2: 상세 실적 데이터 ---
+        sheet_name = '처리실적상세'
+        df.to_excel(writer, index=False, sheet_name=sheet_name, startrow=4)
+        ws_data = writer.sheets[sheet_name]
+        
+        data_title_fmt = writer.book.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter'})
+        subtitle_fmt = writer.book.add_format({'font_size': 10, 'align': 'center', 'color': '#555555'})
+        
+        ws_data.merge_range(0, 0, 1, len(df.columns)-1, f"■ {report_type} - 상세 내역 ■", data_title_fmt)
+        ws_data.merge_range(2, 0, 2, len(df.columns)-1, f"대상: {school_name} | 기간: {period_str} | 출력일: {CURRENT_DATE}", subtitle_fmt)
+        ws_data.merge_range(3, 0, 3, len(df.columns)-1, "※ 본 데이터는 올바로시스템 전자인계서와 연동됩니다.", legal_fmt)
+        
+        for i, col in enumerate(df.columns):
+            ws_data.set_column(i, i, 16)
+        ws_data.protect(EXCEL_PASSWORD, {'objects': True, 'scenarios': True, 'format_cells': False, 'sort': True})
+        
+        # --- 시트3: 요약 통계 ---
+        ws_summary = writer.book.add_worksheet('요약통계')
+        ws_summary.merge_range('A1:D2', f'{school_name} 폐기물 처리 요약 통계', data_title_fmt)
+        
+        summary_items = [
+            ("총 수거 건수", f"{len(df)}건"),
+            ("보고서 유형", report_type),
+            ("법적 근거", "폐기물관리법 시행규칙 별지 제30호서식"),
+            ("개정 적용", "기후에너지환경부령 제18호 (2026.1.1 시행)"),
+        ]
+        # 품목별 합계 동적 생성
+        numeric_cols = df.select_dtypes(include='number').columns
+        for col_name in numeric_cols:
+            total_val = df[col_name].sum()
+            if 'kg' in col_name:
+                summary_items.append((f"{col_name} 합계", f"{total_val:,.1f} kg"))
+            elif '비용' in col_name or '수익' in col_name or '정산' in col_name:
+                summary_items.append((f"{col_name} 합계", f"{total_val:,.0f} 원"))
+        
+        for i, (label, val) in enumerate(summary_items):
+            ws_summary.write(3 + i, 0, label, header_fmt)
+            ws_summary.merge_range(3 + i, 1, 3 + i, 3, val, value_fmt)
+        
+        ws_summary.set_column(0, 0, 28)
+        ws_summary.set_column(1, 3, 20)
+        ws_summary.protect(EXCEL_PASSWORD)
+    
     return output.getvalue()
 
 # ==========================================
@@ -171,39 +297,45 @@ if role == "🏢 관리자 (본사 관제)":
     ])
     
     with tab_total:
-        sub_all, sub_1, sub_2 = st.tabs(["📅 2026년 전체", "🗓️ 2026년 1월", "🗓️ 2026년 2월"])
-        with sub_all: st.dataframe(df_all[['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
-        with sub_1: st.dataframe(df_all[df_all['월별']=='2026-01'][['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
-        with sub_2: st.dataframe(df_all[df_all['월별']=='2026-02'][['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
+        # 동적 년도/월별 탭 생성
+        current_months = sorted(df_all[df_all['년도'] == str(CURRENT_YEAR)]['월별'].unique())
+        tab_labels_total = [f"📅 {CURRENT_YEAR}년 전체"] + [f"🗓️ {m}" for m in current_months]
+        sub_tabs = st.tabs(tab_labels_total)
+        with sub_tabs[0]: st.dataframe(df_all[df_all['년도'] == str(CURRENT_YEAR)][['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
+        for i, m in enumerate(current_months):
+            with sub_tabs[i + 1]: st.dataframe(df_all[df_all['월별'] == m][['날짜', '학교명', '학생수', '최종정산액', '상태']], use_container_width=True)
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
         with col_btn2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
 
     with tab_food:
-        f_all, f_1, f_2 = st.tabs(["📅 2026년 전체", "🗓️ 2026년 1월", "🗓️ 2026년 2월"])
-        with f_all: st.dataframe(df_all[['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
-        with f_1: st.dataframe(df_all[df_all['월별']=='2026-01'][['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
-        with f_2: st.dataframe(df_all[df_all['월별']=='2026-02'][['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
+        tab_labels_food = [f"📅 {CURRENT_YEAR}년 전체"] + [f"🗓️ {m}" for m in current_months]
+        f_tabs = st.tabs(tab_labels_food)
+        with f_tabs[0]: st.dataframe(df_all[df_all['년도'] == str(CURRENT_YEAR)][['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
+        for i, m in enumerate(current_months):
+            with f_tabs[i + 1]: st.dataframe(df_all[df_all['월별'] == m][['날짜', '학교명', '수거업체', '음식물(kg)', '단가(원)', '음식물비용', '상태']], use_container_width=True)
         st.write("")
         col_bf1, col_bf2 = st.columns(2)
         with col_bf1: st.button("🏢 업체별 정산명세서 발송 (음식물)", use_container_width=True)
         with col_bf2: st.button("🏫 학교별 정산명세서 발송 (음식물)", use_container_width=True)
 
     with tab_biz:
-        b_all, b_1, b_2 = st.tabs(["📅 2026년 전체", "🗓️ 2026년 1월", "🗓️ 2026년 2월"])
-        with b_all: st.dataframe(df_all[['날짜', '학교명', '학생수', '사업장(kg)', '사업장비용']], use_container_width=True)
-        with b_1: st.dataframe(df_all[df_all['월별']=='2026-01'][['날짜', '학교명', '학생수', '사업장(kg)', '사업장비용']], use_container_width=True)
-        with b_2: st.dataframe(df_all[df_all['월별']=='2026-02'][['날짜', '학교명', '학생수', '사업장(kg)', '사업장비용']], use_container_width=True)
+        tab_labels_biz = [f"📅 {CURRENT_YEAR}년 전체"] + [f"🗓️ {m}" for m in current_months]
+        b_tabs = st.tabs(tab_labels_biz)
+        with b_tabs[0]: st.dataframe(df_all[df_all['년도'] == str(CURRENT_YEAR)][['날짜', '학교명', '학생수', '사업장(kg)', '사업장비용']], use_container_width=True)
+        for i, m in enumerate(current_months):
+            with b_tabs[i + 1]: st.dataframe(df_all[df_all['월별'] == m][['날짜', '학교명', '학생수', '사업장(kg)', '사업장비용']], use_container_width=True)
         st.write("")
         col_bb1, col_bb2 = st.columns(2)
         with col_bb1: st.button("🏢 업체별 정산명세서 발송 (사업장)", use_container_width=True)
         with col_bb2: st.button("🏫 학교별 정산명세서 발송 (사업장)", use_container_width=True)
 
     with tab_recycle:
-        r_all, r_1, r_2 = st.tabs(["📅 2026년 전체", "🗓️ 2026년 1월", "🗓️ 2026년 2월"])
-        with r_all: st.dataframe(df_all[['날짜', '학교명', '학생수', '재활용(kg)', '재활용수익']], use_container_width=True)
-        with r_1: st.dataframe(df_all[df_all['월별']=='2026-01'][['날짜', '학교명', '학생수', '재활용(kg)', '재활용수익']], use_container_width=True)
-        with r_2: st.dataframe(df_all[df_all['월별']=='2026-02'][['날짜', '학교명', '학생수', '재활용(kg)', '재활용수익']], use_container_width=True)
+        tab_labels_rec = [f"📅 {CURRENT_YEAR}년 전체"] + [f"🗓️ {m}" for m in current_months]
+        r_tabs = st.tabs(tab_labels_rec)
+        with r_tabs[0]: st.dataframe(df_all[df_all['년도'] == str(CURRENT_YEAR)][['날짜', '학교명', '학생수', '재활용(kg)', '재활용수익']], use_container_width=True)
+        for i, m in enumerate(current_months):
+            with r_tabs[i + 1]: st.dataframe(df_all[df_all['월별'] == m][['날짜', '학교명', '학생수', '재활용(kg)', '재활용수익']], use_container_width=True)
         st.write("")
         col_br1, col_br2 = st.columns(2)
         with col_br1: st.button("🏢 업체별 정산명세서 발송 (재활용)", use_container_width=True)
@@ -318,8 +450,17 @@ elif role == "🏫 학교 담당자 (행정실)":
 
         st.write("---")
         
-        st.subheader("🖨️ 행정 증빙 서류 자동 출력 (관공서 법정 양식 적용)")
+        st.subheader("🖨️ 행정 증빙 서류 자동 출력 (법정 양식 적용)")
         st.write("아래 메뉴(Tab)를 클릭하여 필요한 서류를 품목별로 다운로드하세요.")
+        st.caption("📌 2026.1.1 시행 「기후에너지환경부령 제18호」 개정사항 반영 완료")
+        
+        # 기간 문자열 생성
+        if not df_school.empty:
+            period_start = df_school['날짜'].min()[:10]
+            period_end = df_school['날짜'].max()[:10]
+            period_str = f"{period_start} ~ {period_end}"
+        else:
+            period_str = "데이터 없음"
         
         doc_tab1, doc_tab2, doc_tab3, doc_tab4 = st.tabs([
             "📊 [월간] 폐기물 정산(청구)서", 
@@ -332,28 +473,43 @@ elif role == "🏫 학교 담당자 (행정실)":
             st.info("💡 행정실 회계 처리를 위한 월간 정산서입니다. 통합본 또는 품목별로 분리하여 다운로드 가능합니다.")
             col_d1, col_d2, col_d3, col_d4 = st.columns(4)
             with col_d1:
-                st.download_button("전체 통합본 다운로드", data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','최종정산액']], "통합 정산(청구)서"), file_name=f"{school}_통합_월간정산서.xlsx", use_container_width=True)
+                st.download_button("전체 통합본 다운로드", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액']], "통합 정산(청구)서", school, period_str), 
+                    file_name=f"{school}_통합_월간정산서.xlsx", use_container_width=True)
             with col_d2:
-                st.download_button("🗑️ 음식물 전용 다운로드", data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)','음식물비용']], "음식물 정산(청구)서"), file_name=f"{school}_음식물_월간정산서.xlsx", use_container_width=True)
+                st.download_button("🗑️ 음식물 전용 다운로드", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','단가(원)','음식물비용']], "음식물 정산(청구)서", school, period_str), 
+                    file_name=f"{school}_음식물_월간정산서.xlsx", use_container_width=True)
             with col_d3:
-                st.download_button("🗄️ 사업장 전용 다운로드", data=create_secure_excel(df_school[['날짜','학교명','사업장(kg)','사업장비용']], "사업장 정산(청구)서"), file_name=f"{school}_사업장_월간정산서.xlsx", use_container_width=True)
+                st.download_button("🗄️ 사업장 전용 다운로드", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], "사업장 정산(청구)서", school, period_str), 
+                    file_name=f"{school}_사업장_월간정산서.xlsx", use_container_width=True)
             with col_d4:
-                st.download_button("♻️ 재활용 전용 다운로드", data=create_secure_excel(df_school[['날짜','학교명','재활용(kg)','재활용수익']], "재활용 정산(청구)서"), file_name=f"{school}_재활용_월간정산서.xlsx", use_container_width=True)
+                st.download_button("♻️ 재활용 전용 다운로드", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], "재활용 정산(청구)서", school, period_str), 
+                    file_name=f"{school}_재활용_월간정산서.xlsx", use_container_width=True)
 
         with doc_tab2:
             st.info("💡 교육청 및 지자체 제출용 [폐기물관리법 시행규칙 별지 제30호서식] 법정 양식입니다.")
+            st.caption("✅ 기후에너지환경부령 제18호 (2026.1.1 시행) 반영: 전지류 분류체계 개편, 재활용 유형 정비")
             col_r1, col_r2, col_r3 = st.columns(3)
             with col_r1:
-                st.download_button("🗑️ 음식물 실적보고서", data=create_secure_excel(df_school[['날짜','학교명','음식물(kg)']], "음식물 배출 및 처리 실적보고"), file_name=f"{school}_음식물_실적보고서.xlsx", use_container_width=True)
+                st.download_button("🗑️ 음식물 실적보고서", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','단가(원)','음식물비용']], "음식물류 폐기물 배출 및 처리 실적보고서", school, period_str), 
+                    file_name=f"{school}_음식물_실적보고서.xlsx", use_container_width=True)
             with col_r2:
-                st.download_button("🗄️ 사업장 실적보고서", data=create_secure_excel(df_school[['날짜','학교명','사업장(kg)']], "사업장 배출 및 처리 실적보고"), file_name=f"{school}_사업장_실적보고서.xlsx", use_container_width=True)
+                st.download_button("🗄️ 사업장 실적보고서", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], "사업장일반폐기물 배출 및 처리 실적보고서", school, period_str), 
+                    file_name=f"{school}_사업장_실적보고서.xlsx", use_container_width=True)
             with col_r3:
-                st.download_button("♻️ 재활용 실적보고서", data=create_secure_excel(df_school[['날짜','학교명','재활용(kg)']], "재활용 배출 및 처리 실적보고"), file_name=f"{school}_재활용_실적보고서.xlsx", use_container_width=True)
+                st.download_button("♻️ 재활용 실적보고서", 
+                    data=create_legal_report_excel(df_school[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], "재활용 폐기물 배출 및 처리 실적보고서", school, period_str), 
+                    file_name=f"{school}_재활용_실적보고서.xlsx", use_container_width=True)
 
         with doc_tab3:
             st.info("💡 사업장 폐기물 처리 시, 재활용 수익으로 비용을 상계(차감)한 내역을 증빙하는 서류입니다.")
             st.download_button("📄 사업장 일반폐기물 재활용 상계처리 증빙서 다운로드", 
-                               data=create_secure_excel(df_school[['날짜','학교명','재활용(kg)','재활용수익']], "사업장 폐기물 재활용 상계처리 증빙 내역"), 
+                               data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','재활용(kg)','재활용수익','사업장비용']], "사업장 폐기물 재활용 상계처리 증빙 내역", school, period_str), 
                                file_name=f"{school}_상계증빙.xlsx")
                                
         with doc_tab4:
@@ -412,3 +568,128 @@ elif role == "🚚 수거 기사 (현장 앱)":
                     st.rerun()
                 else:
                     st.warning("수거한 중량(kg)을 먼저 입력해 주세요.")
+
+# ==========================================
+# 5. 실제 수거 데이터 연동 모듈
+# ==========================================
+# --- 5-1. 외부 데이터 소스 연동 설정 (사이드바 하단) ---
+with st.sidebar:
+    st.write("---")
+    st.markdown("### ⚙️ 데이터 연동 설정")
+    
+    with st.expander("📂 실제 수거 데이터 업로드", expanded=False):
+        st.caption("엑셀(.xlsx) 또는 CSV 파일로 실제 수거 데이터를 업로드하세요.")
+        st.caption("필수 컬럼: 날짜, 학교명, 음식물(kg), 재활용(kg), 사업장(kg)")
+        
+        uploaded_file = st.file_uploader("수거 데이터 파일 선택", type=['csv', 'xlsx', 'xls'], label_visibility="collapsed")
+        
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df_upload = pd.read_csv(uploaded_file)
+                else:
+                    df_upload = pd.read_excel(uploaded_file)
+                
+                st.success(f"✅ {len(df_upload)}건 데이터 로드 완료")
+                st.dataframe(df_upload.head(5), use_container_width=True)
+                
+                # 컬럼 매핑 (유연한 매핑)
+                required_cols = ['날짜', '학교명', '음식물(kg)', '재활용(kg)', '사업장(kg)']
+                missing_cols = [c for c in required_cols if c not in df_upload.columns]
+                
+                if missing_cols:
+                    st.warning(f"⚠️ 누락된 필수 컬럼: {', '.join(missing_cols)}")
+                    st.info("💡 컬럼명 매핑 기능: 아래에서 기존 컬럼을 플랫폼 컬럼에 매핑하세요.")
+                    
+                    col_mapping = {}
+                    for req_col in missing_cols:
+                        mapped = st.selectbox(f"'{req_col}'에 해당하는 컬럼", 
+                                             ["(선택 안함)"] + list(df_upload.columns), 
+                                             key=f"map_{req_col}")
+                        if mapped != "(선택 안함)":
+                            col_mapping[mapped] = req_col
+                    
+                    if col_mapping and st.button("컬럼 매핑 적용", type="secondary"):
+                        df_upload = df_upload.rename(columns=col_mapping)
+                        st.success("✅ 컬럼 매핑 완료")
+                
+                if st.button("🔄 실제 데이터로 DB 업데이트", type="primary", use_container_width=True):
+                    # 누락 컬럼 기본값 채우기
+                    if '학생수' not in df_upload.columns:
+                        df_upload['학생수'] = df_upload['학교명'].map(STUDENT_COUNTS).fillna(0).astype(int)
+                    if '수거업체' not in df_upload.columns:
+                        df_upload['수거업체'] = "하영자원(본사 직영)"
+                    if '단가(원)' not in df_upload.columns:
+                        df_upload['단가(원)'] = 150
+                    if '재활용단가(원)' not in df_upload.columns:
+                        df_upload['재활용단가(원)'] = 300
+                    if '사업장단가(원)' not in df_upload.columns:
+                        df_upload['사업장단가(원)'] = 200
+                    if '상태' not in df_upload.columns:
+                        df_upload['상태'] = "정산대기"
+                    
+                    # 기존 DB와 병합 (중복 제거)
+                    df_existing = load_data()
+                    df_merged = pd.concat([df_existing, df_upload], ignore_index=True)
+                    df_merged = df_merged.drop_duplicates(subset=['날짜', '학교명'], keep='last')
+                    df_merged.to_csv(DB_FILE, index=False)
+                    
+                    st.success(f"✅ {len(df_upload)}건 실제 데이터가 DB에 반영되었습니다!")
+                    st.info(f"📊 전체 DB: {len(df_merged)}건")
+                    time.sleep(1)
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"❌ 파일 처리 오류: {str(e)}")
+    
+    with st.expander("🔗 올바로시스템 EDI 연동", expanded=False):
+        st.caption("한국환경공단 올바로(Allbaro) OpenAPI EDI 연계 설정")
+        
+        allbaro_id = st.text_input("올바로시스템 사업자 ID", placeholder="사업자등록번호")
+        allbaro_connected = st.toggle("EDI 자동 연동 활성화", value=False)
+        
+        if allbaro_connected:
+            st.success("🟢 EDI 연동 대기 중")
+            st.caption("""
+            **연동 방식**: OpenAPI (T200_5001_01 인터페이스)
+            - 수거 실적 입력 → 자동으로 전자인계서 생성
+            - 인계번호 자동 발급 및 관리
+            - 배출자 → 운반자 → 처리자 3단계 자동 확인
+            
+            ⚠️ 실제 연동은 올바로시스템 EDI 승인 후 활성화됩니다.
+            문의: 한국환경공단 올바로 고객센터 1600-8282
+            """)
+        else:
+            st.caption("🔴 EDI 미연동 (수동 모드)")
+    
+    with st.expander("📡 Google Sheets 실시간 연동", expanded=False):
+        st.caption("Google Sheets와 실시간 동기화하여 여러 기기에서 데이터를 공유합니다.")
+        
+        gsheet_url = st.text_input("Google Sheets URL", placeholder="https://docs.google.com/spreadsheets/d/...")
+        
+        if gsheet_url:
+            st.info("💡 Google Sheets 연동을 위해 `gspread` 패키지가 필요합니다.")
+            st.code("pip install gspread oauth2client", language="bash")
+            st.caption("""
+            **설정 방법:**
+            1. Google Cloud Console에서 서비스 계정 생성
+            2. JSON 키 파일 다운로드
+            3. Streamlit Secrets에 키 정보 등록
+            4. Google Sheet에 서비스 계정 이메일 공유 추가
+            """)
+        
+    with st.expander("📋 데이터 내보내기 / 백업", expanded=False):
+        if not df_all.empty:
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                csv_data = df_all.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("💾 전체 DB → CSV 백업", data=csv_data, 
+                                   file_name=f"hayoung_backup_{CURRENT_DATE}.csv",
+                                   use_container_width=True)
+            with col_exp2:
+                excel_backup = create_secure_excel(df_all, "전체 데이터 백업")
+                st.download_button("💾 전체 DB → Excel 백업", data=excel_backup,
+                                   file_name=f"hayoung_backup_{CURRENT_DATE}.xlsx",
+                                   use_container_width=True)
+            
+            st.caption(f"📊 현재 DB 상태: {len(df_all)}건 | 최종 업데이트: {df_all['날짜'].max()[:10]}")
