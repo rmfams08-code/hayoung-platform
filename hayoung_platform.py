@@ -148,27 +148,38 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 데이터 영구 저장 및 실시간 연산 (자동 감지 및 생성 로직 추가)
+# 2. 데이터 영구 저장 및 실시간 연산 (실제 수거 데이터 통합)
 # ==========================================
 DB_FILE = "hayoung_data_v5.csv"
+REAL_DATA_FILE = "hayoung_real_2025.csv"
+
+# ★ 탄소 감축 계수 (환경부 기준)
+# 음식물폐기물 퇴비화 재활용 시 매립 대비 CO₂ 감축: 0.587 kgCO₂eq/kg
+# 소나무 1그루 연간 CO₂ 흡수량: 6.6 kg (산림청)
+CO2_FACTOR = 0.587  # kgCO₂eq per kg 음식물폐기물
+TREE_FACTOR = 6.6   # kg CO₂ per 소나무 1그루/년
+
+def load_real_data():
+    """업로드된 실제 2025년 수거 데이터 로딩 (3~12월)"""
+    try:
+        df = pd.read_csv(REAL_DATA_FILE)
+        return df
+    except:
+        return pd.DataFrame()
 
 def load_data():
     cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
     try:
         df = pd.read_csv(DB_FILE)
-        # 파일은 있지만 과거 연도(2024년) 데이터가 없는 경우, 에러를 발생시켜 아래 except 구문으로 넘김
         if not df['날짜'].str.contains('2024').any():
             raise ValueError("과거 연도 데이터가 없어 새로 생성합니다.")
         return df
     except:
-        # 파일이 아예 없거나, 과거 데이터가 없는 경우 최근 2년 + 현재 연도 데이터를 자동으로 새로 만듦
         sample_data = []
-        # 동적 년도 생성: 2년 전 ~ 현재 연도
         for year in range(CURRENT_YEAR - 2, CURRENT_YEAR + 1):
             if year < CURRENT_YEAR:
                 months_to_gen = [(11, 30), (12, 31)]
             else:
-                # 현재 연도: 1월부터 현재 월까지
                 months_to_gen = [(m, 28 if m == 2 else 30 if m in [4,6,9,11] else 31) for m in range(1, CURRENT_MONTH + 1)]
             for month, days in months_to_gen:
                 for day in range(1, days + 1, 3): 
@@ -178,7 +189,6 @@ def load_data():
                         recycle = int(count * random.uniform(0.05, 0.1))
                         biz = int(count * random.uniform(0.02, 0.05))
                         status = "정산완료" if year < CURRENT_YEAR else "정산대기"
-                        
                         sample_data.append({
                             "날짜": f"{year}-{month:02d}-{day:02d} {random.randint(8, 15):02d}:{random.randint(0, 59):02d}:{random.randint(0, 59):02d}",
                             "학교명": school, "학생수": count, "수거업체": "하영자원(본사 직영)",
@@ -186,7 +196,7 @@ def load_data():
                             "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": status
                         })
         df = pd.DataFrame(sample_data, columns=cols)
-        df.to_csv(DB_FILE, index=False) # 새로 만든 데이터를 파일에 덮어쓰기 저장
+        df.to_csv(DB_FILE, index=False)
         return df
 
 def save_data(new_row):
@@ -194,6 +204,10 @@ def save_data(new_row):
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     df.to_csv(DB_FILE, index=False)
 
+# --- 실제 데이터(2025 엑셀) 로딩 ---
+df_real = load_real_data()
+
+# --- 기존 시뮬레이션 데이터 로딩 ---
 df_all = load_data()
 
 if not df_all.empty:
@@ -203,10 +217,20 @@ if not df_all.empty:
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].astype(str).str[:7]
     df_all['년도'] = df_all['날짜'].astype(str).str[:4] 
-    df_all['탄소감축량(kg)'] = df_all['재활용(kg)'] * 1.2
+    df_all['탄소감축량(kg)'] = df_all['음식물(kg)'] * CO2_FACTOR  # ★ 환경부 기준 적용
 else:
     cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "년도", "탄소감축량(kg)"]
     df_all = pd.DataFrame(columns=cols)
+
+# --- 실제 데이터 전처리 (df_real) ---
+if not df_real.empty:
+    df_real['날짜_dt'] = pd.to_datetime(df_real['날짜'], errors='coerce')
+    df_real['월'] = df_real['날짜_dt'].dt.month
+    df_real['년도'] = df_real['날짜_dt'].dt.year.astype(str)
+    df_real['월별'] = df_real['날짜_dt'].dt.strftime('%Y-%m')
+    df_real['수거여부'] = df_real['음식물(kg)'] > 0
+    df_real['탄소감축량(kg)'] = df_real['음식물(kg)'] * CO2_FACTOR
+    df_real['소나무환산(그루)'] = df_real['탄소감축량(kg)'] / TREE_FACTOR
 
 
 def create_secure_excel(df, title):
@@ -419,7 +443,7 @@ else:
         with col5: st.markdown(f'<div class="custom-card custom-card-orange"><div class="metric-title">🛡️ 안전 점검</div><div class="metric-value-total" style="color:#1a73e8;">100%</div></div>', unsafe_allow_html=True)
 
         total_co2_all = df_all['탄소감축량(kg)'].sum()
-        tree_count_all = int(total_co2_all / 6.6)
+        tree_count_all = int(total_co2_all / TREE_FACTOR)
         st.markdown(f'<div style="background-color:#61b346;padding:30px;border-radius:12px;color:white;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><div style="flex:1;text-align:center;"><h3 style="margin:0;color:white;">🌍 전사 ESG 탄소 저감 성과</h3><p style="margin:0;font-size:16px;opacity:0.9;">누적 CO₂ 감축량</p><h1 style="margin:0;color:white;font-size:40px;font-weight:900;">{total_co2_all:,.1f} kg</h1></div><div style="font-size:40px;font-weight:bold;padding:0 20px;">=</div><div style="flex:1;text-align:center;"><p style="margin:0;font-size:16px;opacity:0.9;margin-top:35px;">소나무 식재 효과</p><h1 style="margin:0;color:white;font-size:40px;font-weight:900;">🌲 {tree_count_all:,} 그루</h1></div></div>', unsafe_allow_html=True)
 
         col_esg1, col_esg2, col_esg3 = st.columns([1,2,1])
@@ -435,48 +459,127 @@ else:
         st.write("---")
 
         st.subheader("📑 통합 및 개별 정산 시트 🔗")
-        tab_total, tab_food, tab_biz, tab_recycle, tab_map, tab_sub = st.tabs(["전체 통합 정산","음식물 정산","사업장 정산","재활용 정산","📍 차량 관제","🤝 외주업체"])
-        current_months = sorted(df_all[df_all['년도']==str(CURRENT_YEAR)]['월별'].unique())
+        tab_real, tab_total, tab_food, tab_biz, tab_recycle, tab_map, tab_sub = st.tabs(["📊 실제 수거 데이터(2025)","전체 통합 정산","음식물 정산","사업장 정산","재활용 정산","📍 차량 관제","🤝 외주업체"])
+
+        # ★★★ [신규] 실제 수거 데이터 탭 ★★★
+        with tab_real:
+            if not df_real.empty:
+                st.markdown("#### 📊 2025년 실제 음식물폐기물 수거 데이터 (3~12월)")
+                st.caption(f"총 {len(df_real):,}건 | 수거일 {df_real['수거여부'].sum():,}건 | 총 수거량 {df_real['음식물(kg)'].sum():,.0f}kg")
+                # 학교 선택 필터
+                real_schools = sorted(df_real['학교명'].unique())
+                sel_school_r = st.selectbox("🏫 학교/거래처 선택", ["전체"] + real_schools, key="admin_real_school")
+                df_r_filtered = df_real if sel_school_r == "전체" else df_real[df_real['학교명']==sel_school_r]
+                # 월별 하위 탭
+                real_months = sorted(df_r_filtered['월'].unique())
+                month_labels = ["📅 연간 전체"] + [f"🗓️ {m}월" for m in real_months]
+                rtabs = st.tabs(month_labels)
+                with rtabs[0]:
+                    # 연간 학교별 요약
+                    yr_summary = df_r_filtered.groupby('학교명').agg(
+                        수거일수=('수거여부','sum'), 총수거량=('음식물(kg)','sum'),
+                        총공급가=('공급가','sum'), 탄소감축=('탄소감축량(kg)','sum')
+                    ).reset_index().sort_values('총수거량', ascending=False)
+                    yr_summary['소나무환산'] = (yr_summary['탄소감축'] / TREE_FACTOR).astype(int)
+                    yr_summary.columns = ['학교명','수거일수','총수거량(kg)','총공급가(원)','CO₂감축(kg)','🌲소나무(그루)']
+                    st.dataframe(yr_summary, use_container_width=True, hide_index=True)
+                    # 연간 차트
+                    st.bar_chart(yr_summary.set_index('학교명')['총수거량(kg)'], color="#ea4335")
+                for idx, m in enumerate(real_months):
+                    with rtabs[idx+1]:
+                        df_m = df_r_filtered[df_r_filtered['월']==m]
+                        df_m_active = df_m[df_m['수거여부']==True]
+                        mc1, mc2, mc3 = st.columns(3)
+                        with mc1: st.metric("수거일수", f"{len(df_m_active)}일")
+                        with mc2: st.metric("수거량", f"{df_m_active['음식물(kg)'].sum():,.0f}kg")
+                        with mc3: st.metric("공급가", f"{df_m_active['공급가'].sum():,.0f}원")
+                        if sel_school_r == "전체":
+                            m_summary = df_m_active.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
+                            st.dataframe(m_summary, use_container_width=True, hide_index=True)
+                        else:
+                            st.dataframe(df_m[['날짜','학교명','음식물(kg)','단가(원)','공급가','재활용방법','재활용업체']],use_container_width=True, hide_index=True)
+            else:
+                st.warning("실제 수거 데이터 파일(hayoung_real_2025.csv)이 없습니다.")
+
+        # 기존 시뮬레이션 정산 탭
+        current_months = sorted(df_all[df_all['년도']==str(CURRENT_YEAR)]['월별'].unique()) if not df_all.empty else []
+        all_schools_sim = sorted(df_all['학교명'].unique()) if not df_all.empty else []
         with tab_total:
-            stabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in current_months])
-            with stabs[0]: st.dataframe(df_all[df_all['년도']==str(CURRENT_YEAR)][['날짜','학교명','학생수','최종정산액','상태']], use_container_width=True)
-            for i, m in enumerate(current_months):
-                with stabs[i+1]: st.dataframe(df_all[df_all['월별']==m][['날짜','학교명','학생수','최종정산액','상태']], use_container_width=True)
+            sel_school_t = st.selectbox("🏫 학교 필터", ["전체"] + all_schools_sim, key="admin_total_school")
+            df_t = df_all if sel_school_t == "전체" else df_all[df_all['학교명']==sel_school_t]
+            cur_months_t = sorted(df_t[df_t['년도']==str(CURRENT_YEAR)]['월별'].unique()) if not df_t.empty else []
+            years_t = sorted(df_t['년도'].unique(), reverse=True) if not df_t.empty else []
+            yr_labels = [f"📅 {y}년" for y in years_t] + [f"🗓️ {m}" for m in cur_months_t]
+            stabs = st.tabs(yr_labels) if yr_labels else [st.container()]
+            for yi, y in enumerate(years_t):
+                with stabs[yi]: st.dataframe(df_t[df_t['년도']==y][['날짜','학교명','학생수','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액','상태']], use_container_width=True, hide_index=True)
+            for mi, m in enumerate(cur_months_t):
+                with stabs[len(years_t)+mi]: st.dataframe(df_t[df_t['월별']==m][['날짜','학교명','학생수','최종정산액','상태']], use_container_width=True, hide_index=True)
             cb1, cb2 = st.columns(2)
             with cb1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
             with cb2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
         with tab_food:
-            ftabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in current_months])
-            with ftabs[0]: st.dataframe(df_all[df_all['년도']==str(CURRENT_YEAR)][['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True)
-            for i, m in enumerate(current_months):
-                with ftabs[i+1]: st.dataframe(df_all[df_all['월별']==m][['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True)
+            sel_school_f = st.selectbox("🏫 학교 필터", ["전체"] + all_schools_sim, key="admin_food_school")
+            df_f = df_all if sel_school_f == "전체" else df_all[df_all['학교명']==sel_school_f]
+            cur_months_f = sorted(df_f[df_f['년도']==str(CURRENT_YEAR)]['월별'].unique()) if not df_f.empty else []
+            ftabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in cur_months_f])
+            with ftabs[0]: st.dataframe(df_f[df_f['년도']==str(CURRENT_YEAR)][['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True, hide_index=True)
+            for i, m in enumerate(cur_months_f):
+                with ftabs[i+1]: st.dataframe(df_f[df_f['월별']==m][['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True, hide_index=True)
         with tab_biz:
-            btabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in current_months])
-            with btabs[0]: st.dataframe(df_all[df_all['년도']==str(CURRENT_YEAR)][['날짜','학교명','사업장(kg)','사업장비용']], use_container_width=True)
-            for i, m in enumerate(current_months):
-                with btabs[i+1]: st.dataframe(df_all[df_all['월별']==m][['날짜','학교명','사업장(kg)','사업장비용']], use_container_width=True)
+            sel_school_b = st.selectbox("🏫 학교 필터", ["전체"] + all_schools_sim, key="admin_biz_school")
+            df_b = df_all if sel_school_b == "전체" else df_all[df_all['학교명']==sel_school_b]
+            cur_months_b = sorted(df_b[df_b['년도']==str(CURRENT_YEAR)]['월별'].unique()) if not df_b.empty else []
+            btabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in cur_months_b])
+            with btabs[0]: st.dataframe(df_b[df_b['년도']==str(CURRENT_YEAR)][['날짜','학교명','사업장(kg)','사업장비용']], use_container_width=True, hide_index=True)
+            for i, m in enumerate(cur_months_b):
+                with btabs[i+1]: st.dataframe(df_b[df_b['월별']==m][['날짜','학교명','사업장(kg)','사업장비용']], use_container_width=True, hide_index=True)
         with tab_recycle:
-            rtabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in current_months])
-            with rtabs[0]: st.dataframe(df_all[df_all['년도']==str(CURRENT_YEAR)][['날짜','학교명','재활용(kg)','재활용수익']], use_container_width=True)
-            for i, m in enumerate(current_months):
-                with rtabs[i+1]: st.dataframe(df_all[df_all['월별']==m][['날짜','학교명','재활용(kg)','재활용수익']], use_container_width=True)
+            sel_school_rc = st.selectbox("🏫 학교 필터", ["전체"] + all_schools_sim, key="admin_rec_school")
+            df_rc = df_all if sel_school_rc == "전체" else df_all[df_all['학교명']==sel_school_rc]
+            cur_months_rc = sorted(df_rc[df_rc['년도']==str(CURRENT_YEAR)]['월별'].unique()) if not df_rc.empty else []
+            rctabs = st.tabs([f"📅 {CURRENT_YEAR}년 전체"]+[f"🗓️ {m}" for m in cur_months_rc])
+            with rctabs[0]: st.dataframe(df_rc[df_rc['년도']==str(CURRENT_YEAR)][['날짜','학교명','재활용(kg)','재활용수익']], use_container_width=True, hide_index=True)
+            for i, m in enumerate(cur_months_rc):
+                with rctabs[i+1]: st.dataframe(df_rc[df_rc['월별']==m][['날짜','학교명','재활용(kg)','재활용수익']], use_container_width=True, hide_index=True)
         with tab_map:
             st.write("📍 **수거 차량 실시간 GPS 관제**")
             st.map(pd.DataFrame({'lat':[37.20,37.25],'lon':[127.05,127.10]}))
         with tab_sub:
             st.subheader("🤝 외주 수거업체 현황")
             st.markdown('<div class="alert-box">🔔 <b>[계약 갱신]</b> B자원 계약 만료 30일 전 (2026-03-25)</div>', unsafe_allow_html=True)
-            cs1, cs2, cs3 = st.columns(3)
-            with cs1: st.info("🏆 우수: **A환경** (98점)")
-            with cs2: st.warning("⚠️ 주의: **B자원** (과속 1회)")
-            with cs3: st.success("✅ 스쿨존 위반: **1건**")
-            vendor_data = pd.DataFrame({"외주업체명":["A환경","B자원"],"담당학교":["동탄중학교","수원고등학교"],"안전평가":["98점(우수)","85점(주의)"],"운행상태":["🟢 운행중","🟡 대기중"]})
-            st.dataframe(vendor_data, use_container_width=True)
-            st.write("---")
-            st.subheader("🔎 기사 상세 조회")
-            sel_vendor = st.selectbox("업체 선택", ["A환경","B자원","C로지스"])
-            if sel_vendor == "A환경":
-                st.markdown('<div class="safety-box">🚛 경기88아 1234 | 👨‍✈️ 김하영 | 🏫 오늘 배차 1곳</div>', unsafe_allow_html=True)
+            # ★ 외주업체 실제 데이터 연동
+            if not df_real.empty:
+                recyclers = sorted(df_real['재활용업체'].unique())
+                st.markdown(f"**등록된 재활용업체:** {', '.join(recyclers)}")
+                sel_recycler = st.selectbox("업체 선택", recyclers, key="admin_recycler")
+                df_vendor = df_real[df_real['재활용업체']==sel_recycler]
+                # 월별 하위시트
+                v_months = sorted(df_vendor['월'].unique())
+                vtabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}월" for m in v_months])
+                with vtabs[0]:
+                    v_summary = df_vendor[df_vendor['수거여부']].groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
+                    st.dataframe(v_summary, use_container_width=True, hide_index=True)
+                for vi, vm in enumerate(v_months):
+                    with vtabs[vi+1]:
+                        df_vm = df_vendor[(df_vendor['월']==vm) & (df_vendor['수거여부'])]
+                        vm_sum = df_vm.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
+                        st.dataframe(vm_sum, use_container_width=True, hide_index=True)
+                # 품목별 하위시트
+                st.write("---")
+                st.markdown("**♻️ 재활용 방법별 현황**")
+                methods = sorted(df_vendor['재활용방법'].unique())
+                mtabs = st.tabs([f"🔄 {mth}" for mth in methods]) if methods else []
+                for mi_idx, mth in enumerate(methods):
+                    with mtabs[mi_idx]:
+                        df_mth = df_vendor[(df_vendor['재활용방법']==mth) & (df_vendor['수거여부'])]
+                        mth_sum = df_mth.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
+                        st.dataframe(mth_sum, use_container_width=True, hide_index=True)
+            else:
+                cs1, cs2, cs3 = st.columns(3)
+                with cs1: st.info("🏆 우수: **A환경** (98점)")
+                with cs2: st.warning("⚠️ 주의: **B자원** (과속 1회)")
+                with cs3: st.success("✅ 스쿨존 위반: **1건**")
 
         # 관리자 사이드바 - 데이터 업로드/백업
         with st.sidebar:
@@ -506,76 +609,319 @@ else:
     elif role == "school":
         school = st.session_state.user_name
         st.title(f"🏫 {school} 폐기물 통합 대시보드")
+        # 실제 데이터 필터
+        df_school_real = df_real[df_real['학교명'] == school] if not df_real.empty else pd.DataFrame()
         df_school = df_all[df_all['학교명'] == school]
-        if not df_school.empty:
+
+        # --- ESG 환경 기여도 (실제 데이터 우선) ---
+        if not df_school_real.empty:
+            total_kg_real = df_school_real['음식물(kg)'].sum()
+            total_co2_real = total_kg_real * CO2_FACTOR
+            tree_real = int(total_co2_real / TREE_FACTOR)
+            st.markdown(f'<div style="background:linear-gradient(135deg,#11998e,#38ef7d);padding:20px;border-radius:12px;color:white;margin-bottom:20px;"><h4 style="margin:0;margin-bottom:10px;">🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)</h4><p style="margin:0;font-size:13px;opacity:0.9;">산정기준: 환경부 음식물폐기물 퇴비화 재활용 매립 회피 계수 {CO2_FACTOR} kgCO₂eq/kg</p><h2 style="margin:8px 0;">2025년 실제 수거량: {total_kg_real:,.0f} kg → CO₂ 감축: {total_co2_real:,.1f} kg (🌲 소나무 {tree_real:,}그루)</h2></div>', unsafe_allow_html=True)
+        elif not df_school.empty:
             total_co2_school = df_school['탄소감축량(kg)'].sum()
-            tree_count_school = int(total_co2_school / 6.6)
-            st.markdown(f'<div style="background:linear-gradient(135deg,#11998e,#38ef7d);padding:20px;border-radius:12px;color:white;margin-bottom:20px;"><h4 style="margin:0;margin-bottom:10px;">🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)</h4><h2>누적 CO₂ 감축량: {total_co2_school:,.1f} kg (🌲 소나무 {tree_count_school}그루 식재 효과)</h2></div>', unsafe_allow_html=True)
-            st.subheader("📊 폐기물 배출량 통계 분석")
-            tab_daily, tab_monthly = st.tabs(["🗓️ 일별 배출량","🗓️ 월별 배출량"])
-            with tab_daily:
-                daily_df = df_school.copy()
-                daily_df['일자'] = daily_df['날짜'].astype(str).str[:10]
-                daily_grouped = daily_df.groupby('일자')[['음식물(kg)','사업장(kg)','재활용(kg)']].sum().reset_index()
-                cc1, cc2, cc3 = st.columns(3)
-                with cc1:
-                    st.markdown("<h5 style='text-align:center;color:#ea4335;'>🗑️ 음식물</h5>", unsafe_allow_html=True)
-                    st.bar_chart(daily_grouped.set_index('일자')['음식물(kg)'], color="#ea4335")
-                with cc2:
-                    st.markdown("<h5 style='text-align:center;color:#9b59b6;'>🗄️ 사업장</h5>", unsafe_allow_html=True)
-                    st.bar_chart(daily_grouped.set_index('일자')['사업장(kg)'], color="#9b59b6")
-                with cc3:
-                    st.markdown("<h5 style='text-align:center;color:#34a853;'>♻️ 재활용</h5>", unsafe_allow_html=True)
-                    st.bar_chart(daily_grouped.set_index('일자')['재활용(kg)'], color="#34a853")
-            with tab_monthly:
-                years = sorted(df_school['년도'].unique(), reverse=True)
-                year_tabs = st.tabs([f"📅 {y}년" for y in years])
-                for yi, y in enumerate(years):
-                    with year_tabs[yi]:
-                        y_df = df_school[df_school['년도']==y]
-                        mg = y_df.groupby('월별')[['음식물(kg)','사업장(kg)','재활용(kg)']].sum().reset_index()
-                        mc1, mc2, mc3 = st.columns(3)
-                        with mc1:
-                            st.markdown("<h5 style='text-align:center;color:#ea4335;'>🗑️ 음식물(월별)</h5>", unsafe_allow_html=True)
-                            st.bar_chart(mg.set_index('월별')['음식물(kg)'], color="#ea4335")
-                        with mc2:
-                            st.markdown("<h5 style='text-align:center;color:#9b59b6;'>🗄️ 사업장(월별)</h5>", unsafe_allow_html=True)
-                            st.bar_chart(mg.set_index('월별')['사업장(kg)'], color="#9b59b6")
-                        with mc3:
-                            st.markdown("<h5 style='text-align:center;color:#34a853;'>♻️ 재활용(월별)</h5>", unsafe_allow_html=True)
-                            st.bar_chart(mg.set_index('월별')['재활용(kg)'], color="#34a853")
-            st.write("---")
-            st.markdown("<h5 style='color:#2e7d32;font-weight:bold;'>🛡️ 금일 수거차량 안전 점검 현황</h5>", unsafe_allow_html=True)
-            st.markdown('<div class="safety-box">✅ 배차: 하영자원 (본사 직영)<br>✅ 스쿨존: 정상 (MAX 28km/h)<br>✅ 후방카메라·안전요원: 적합</div>', unsafe_allow_html=True)
-            st.write("---")
-            st.subheader("🖨️ 행정 증빙 서류 자동 출력 (법정 양식)")
-            st.caption("📌 2026.1.1 시행 「기후에너지환경부령 제18호」 반영 완료")
-            period_start = df_school['날짜'].min()[:10]
-            period_end = df_school['날짜'].max()[:10]
-            period_str = f"{period_start} ~ {period_end}"
-            doc_tab1, doc_tab2, doc_tab3, doc_tab4 = st.tabs(["📊 월간 정산서","📈 실적보고서(제30호)","♻️ 상계증빙","🔗 올바로 연동"])
-            with doc_tab1:
-                st.info("💡 행정실 회계 처리용 월간 정산서입니다.")
-                cd1, cd2, cd3, cd4 = st.columns(4)
-                with cd1: st.download_button("전체 통합본", data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액']], "통합 정산서", school, period_str), file_name=f"{school}_통합_정산서.xlsx", use_container_width=True)
-                with cd2: st.download_button("🗑️ 음식물", data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','단가(원)','음식물비용']], "음식물 정산서", school, period_str), file_name=f"{school}_음식물_정산서.xlsx", use_container_width=True)
-                with cd3: st.download_button("🗄️ 사업장", data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], "사업장 정산서", school, period_str), file_name=f"{school}_사업장_정산서.xlsx", use_container_width=True)
-                with cd4: st.download_button("♻️ 재활용", data=create_legal_report_excel(df_school[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], "재활용 정산서", school, period_str), file_name=f"{school}_재활용_정산서.xlsx", use_container_width=True)
-            with doc_tab2:
-                st.info("💡 교육청/지자체 제출용 법정 양식")
-                cr1, cr2, cr3 = st.columns(3)
-                with cr1: st.download_button("🗑️ 음식물 실적", data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','단가(원)','음식물비용']], "음식물류 처리 실적보고서", school, period_str), file_name=f"{school}_음식물_실적.xlsx", use_container_width=True)
-                with cr2: st.download_button("🗄️ 사업장 실적", data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], "사업장 처리 실적보고서", school, period_str), file_name=f"{school}_사업장_실적.xlsx", use_container_width=True)
-                with cr3: st.download_button("♻️ 재활용 실적", data=create_legal_report_excel(df_school[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], "재활용 처리 실적보고서", school, period_str), file_name=f"{school}_재활용_실적.xlsx", use_container_width=True)
-            with doc_tab3:
-                st.info("💡 사업장 폐기물 재활용 수익 상계 증빙")
-                st.download_button("📄 상계증빙서 다운로드", data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','재활용(kg)','재활용수익','사업장비용']], "재활용 상계처리 증빙", school, period_str), file_name=f"{school}_상계증빙.xlsx")
-            with doc_tab4:
-                st.info("💡 올바로 시스템 자동 전송")
-                if st.button("🔗 올바로시스템 전자인계서 연동", type="primary", use_container_width=True):
-                    with st.spinner("한국환경공단 서버 통신 중..."):
-                        time.sleep(2)
-                    st.success("✅ 올바로시스템에 전자인계서 이관 완료!")
+            tree_count_school = int(total_co2_school / TREE_FACTOR)
+            st.markdown(f'<div style="background:linear-gradient(135deg,#11998e,#38ef7d);padding:20px;border-radius:12px;color:white;margin-bottom:20px;"><h4 style="margin:0;margin-bottom:10px;">🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)</h4><h2>누적 CO₂ 감축량: {total_co2_school:,.1f} kg (🌲 소나무 {tree_count_school}그루)</h2></div>', unsafe_allow_html=True)
+
+        has_data = not df_school_real.empty or not df_school.empty
+        if has_data:
+            # --- 메인 탭 구성 ---
+            main_tabs = st.tabs(["📊 실제 수거 통계","📅 수거일정 캘린더","📈 시뮬레이션 통계","🖨️ 행정 증빙 서류","🌍 ESG 탄소중립 보고서"])
+
+            # ★ 탭1: 실제 수거 통계 (2025 엑셀 데이터)
+            with main_tabs[0]:
+                if not df_school_real.empty:
+                    st.markdown("#### 📊 2025년 실제 음식물폐기물 수거 기록")
+                    r_active = df_school_real[df_school_real['수거여부']]
+                    rc1, rc2, rc3, rc4 = st.columns(4)
+                    with rc1: st.metric("총 수거일", f"{len(r_active)}일")
+                    with rc2: st.metric("총 수거량", f"{r_active['음식물(kg)'].sum():,.0f}kg")
+                    with rc3: st.metric("총 공급가", f"{r_active['공급가'].sum():,.0f}원")
+                    with rc4: st.metric("CO₂ 감축", f"{r_active['탄소감축량(kg)'].sum():,.1f}kg")
+                    # 월별 하위탭
+                    r_months = sorted(df_school_real['월'].unique())
+                    r_labels = ["📅 연간 전체"] + [f"🗓️ {m}월" for m in r_months]
+                    r_tabs = st.tabs(r_labels)
+                    with r_tabs[0]:
+                        monthly_sum = r_active.groupby('월').agg(수거일수=('음식물(kg)','count'),수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
+                        monthly_sum.columns = ['월','수거일수','수거량(kg)','공급가(원)']
+                        st.dataframe(monthly_sum, use_container_width=True, hide_index=True)
+                        st.bar_chart(monthly_sum.set_index('월')['수거량(kg)'], color="#ea4335")
+                    for ri, rm in enumerate(r_months):
+                        with r_tabs[ri+1]:
+                            df_rm = df_school_real[df_school_real['월']==rm]
+                            df_rm_show = df_rm[['날짜','음식물(kg)','단가(원)','공급가','재활용방법','재활용업체']].copy()
+                            df_rm_show['수거'] = df_rm['수거여부'].map({True:'✅',False:'—'})
+                            st.dataframe(df_rm_show, use_container_width=True, hide_index=True)
+                            rm_active = df_rm[df_rm['수거여부']]
+                            st.caption(f"수거일: {len(rm_active)}일 | 수거량: {rm_active['음식물(kg)'].sum():,.0f}kg | 공급가: {rm_active['공급가'].sum():,.0f}원")
+                else:
+                    st.info("2025년 실제 수거 데이터가 없습니다.")
+
+            # ★ 탭2: 수거일정 캘린더 (실제 데이터 기반)
+            with main_tabs[1]:
+                st.markdown("#### 📅 수거일정 캘린더")
+                if not df_school_real.empty:
+                    cal_months = sorted(df_school_real['월'].unique())
+                    sel_cal_month = st.selectbox("월 선택", cal_months, format_func=lambda x: f"{x}월", key="school_cal_month")
+                    df_cal = df_school_real[df_school_real['월']==sel_cal_month].copy()
+                    df_cal['일'] = pd.to_datetime(df_cal['날짜']).dt.day
+                    # 캘린더 그리드 생성
+                    import calendar
+                    year_cal = 2025
+                    cal = calendar.Calendar(firstweekday=6)  # 일요일 시작
+                    month_days = list(cal.itermonthdays2(year_cal, sel_cal_month))
+                    st.markdown(f"**{year_cal}년 {sel_cal_month}월 수거 캘린더**")
+                    # 요일 헤더
+                    cols_h = st.columns(7)
+                    for ci, day_name in enumerate(['일','월','화','수','목','금','토']):
+                        cols_h[ci].markdown(f"<div style='text-align:center;font-weight:bold;color:#5f6368;'>{day_name}</div>", unsafe_allow_html=True)
+                    # 주 단위 렌더링
+                    week = []
+                    for day_num, weekday in month_days:
+                        week.append(day_num)
+                        if len(week) == 7:
+                            cols_w = st.columns(7)
+                            for wi, wd in enumerate(week):
+                                if wd == 0:
+                                    cols_w[wi].write("")
+                                else:
+                                    row_match = df_cal[df_cal['일']==wd]
+                                    if not row_match.empty and row_match.iloc[0]['수거여부']:
+                                        kg_val = row_match.iloc[0]['음식물(kg)']
+                                        cols_w[wi].markdown(f"<div style='text-align:center;background:#e8f5e9;border-radius:8px;padding:4px;'><b>{wd}</b><br><span style='color:#2e7d32;font-size:11px;'>✅ {kg_val:,.0f}kg</span></div>", unsafe_allow_html=True)
+                                    else:
+                                        cols_w[wi].markdown(f"<div style='text-align:center;padding:4px;color:#999;'>{wd}</div>", unsafe_allow_html=True)
+                            week = []
+                    if week:
+                        cols_w = st.columns(7)
+                        for wi, wd in enumerate(week):
+                            if wd == 0:
+                                cols_w[wi].write("")
+                            else:
+                                row_match = df_cal[df_cal['일']==wd]
+                                if not row_match.empty and row_match.iloc[0]['수거여부']:
+                                    kg_val = row_match.iloc[0]['음식물(kg)']
+                                    cols_w[wi].markdown(f"<div style='text-align:center;background:#e8f5e9;border-radius:8px;padding:4px;'><b>{wd}</b><br><span style='color:#2e7d32;font-size:11px;'>✅ {kg_val:,.0f}kg</span></div>", unsafe_allow_html=True)
+                                else:
+                                    cols_w[wi].markdown(f"<div style='text-align:center;padding:4px;color:#999;'>{wd}</div>", unsafe_allow_html=True)
+                    cal_active = df_cal[df_cal['수거여부']]
+                    st.caption(f"✅ 수거일: {len(cal_active)}일 | 총 수거량: {cal_active['음식물(kg)'].sum():,.0f}kg")
+                else:
+                    st.info("캘린더에 표시할 실제 수거 데이터가 없습니다.")
+
+            # 탭3: 기존 시뮬레이션 통계
+            with main_tabs[2]:
+                if not df_school.empty:
+                    st.markdown("#### 📈 시뮬레이션 수거 통계 (음식물/사업장/재활용)")
+                    tab_daily, tab_monthly = st.tabs(["🗓️ 일별 배출량","🗓️ 월별 배출량"])
+                    with tab_daily:
+                        daily_df = df_school.copy()
+                        daily_df['일자'] = daily_df['날짜'].astype(str).str[:10]
+                        daily_grouped = daily_df.groupby('일자')[['음식물(kg)','사업장(kg)','재활용(kg)']].sum().reset_index()
+                        cc1, cc2, cc3 = st.columns(3)
+                        with cc1:
+                            st.markdown("<h5 style='text-align:center;color:#ea4335;'>🗑️ 음식물</h5>", unsafe_allow_html=True)
+                            st.bar_chart(daily_grouped.set_index('일자')['음식물(kg)'], color="#ea4335")
+                        with cc2:
+                            st.markdown("<h5 style='text-align:center;color:#9b59b6;'>🗄️ 사업장</h5>", unsafe_allow_html=True)
+                            st.bar_chart(daily_grouped.set_index('일자')['사업장(kg)'], color="#9b59b6")
+                        with cc3:
+                            st.markdown("<h5 style='text-align:center;color:#34a853;'>♻️ 재활용</h5>", unsafe_allow_html=True)
+                            st.bar_chart(daily_grouped.set_index('일자')['재활용(kg)'], color="#34a853")
+                    with tab_monthly:
+                        years = sorted(df_school['년도'].unique(), reverse=True)
+                        year_tabs = st.tabs([f"📅 {y}년" for y in years])
+                        for yi, y in enumerate(years):
+                            with year_tabs[yi]:
+                                y_df = df_school[df_school['년도']==y]
+                                mg = y_df.groupby('월별')[['음식물(kg)','사업장(kg)','재활용(kg)']].sum().reset_index()
+                                mc1, mc2, mc3 = st.columns(3)
+                                with mc1:
+                                    st.markdown("<h5 style='text-align:center;color:#ea4335;'>🗑️ 음식물(월별)</h5>", unsafe_allow_html=True)
+                                    st.bar_chart(mg.set_index('월별')['음식물(kg)'], color="#ea4335")
+                                with mc2:
+                                    st.markdown("<h5 style='text-align:center;color:#9b59b6;'>🗄️ 사업장(월별)</h5>", unsafe_allow_html=True)
+                                    st.bar_chart(mg.set_index('월별')['사업장(kg)'], color="#9b59b6")
+                                with mc3:
+                                    st.markdown("<h5 style='text-align:center;color:#34a853;'>♻️ 재활용(월별)</h5>", unsafe_allow_html=True)
+                                    st.bar_chart(mg.set_index('월별')['재활용(kg)'], color="#34a853")
+                else:
+                    st.info("시뮬레이션 데이터가 없습니다.")
+
+            # 탭4: 행정 증빙 서류
+            with main_tabs[3]:
+                st.subheader("🖨️ 행정 증빙 서류 자동 출력 (법정 양식)")
+                st.caption("📌 2026.1.1 시행 「기후에너지환경부령 제18호」 반영 완료")
+                st.markdown("<h5 style='color:#2e7d32;font-weight:bold;'>🛡️ 금일 수거차량 안전 점검 현황</h5>", unsafe_allow_html=True)
+                st.markdown('<div class="safety-box">✅ 배차: 하영자원 (본사 직영)<br>✅ 스쿨존: 정상 (MAX 28km/h)<br>✅ 후방카메라·안전요원: 적합</div>', unsafe_allow_html=True)
+                if not df_school.empty:
+                    period_start = df_school['날짜'].min()[:10]
+                    period_end = df_school['날짜'].max()[:10]
+                    period_str = f"{period_start} ~ {period_end}"
+                    doc_tab1, doc_tab2, doc_tab3, doc_tab4 = st.tabs(["📊 월간 정산서","📈 실적보고서(제30호)","♻️ 상계증빙","🔗 올바로 연동"])
+                    with doc_tab1:
+                        st.info("💡 행정실 회계 처리용 월간 정산서입니다.")
+                        cd1, cd2, cd3, cd4 = st.columns(4)
+                        with cd1: st.download_button("전체 통합본", data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액']], "통합 정산서", school, period_str), file_name=f"{school}_통합_정산서.xlsx", use_container_width=True)
+                        with cd2: st.download_button("🗑️ 음식물", data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','단가(원)','음식물비용']], "음식물 정산서", school, period_str), file_name=f"{school}_음식물_정산서.xlsx", use_container_width=True)
+                        with cd3: st.download_button("🗄️ 사업장", data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], "사업장 정산서", school, period_str), file_name=f"{school}_사업장_정산서.xlsx", use_container_width=True)
+                        with cd4: st.download_button("♻️ 재활용", data=create_legal_report_excel(df_school[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], "재활용 정산서", school, period_str), file_name=f"{school}_재활용_정산서.xlsx", use_container_width=True)
+                    with doc_tab2:
+                        st.info("💡 교육청/지자체 제출용 법정 양식")
+                        cr1, cr2, cr3 = st.columns(3)
+                        with cr1: st.download_button("🗑️ 음식물 실적", data=create_legal_report_excel(df_school[['날짜','학교명','음식물(kg)','단가(원)','음식물비용']], "음식물류 처리 실적보고서", school, period_str), file_name=f"{school}_음식물_실적.xlsx", use_container_width=True)
+                        with cr2: st.download_button("🗄️ 사업장 실적", data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], "사업장 처리 실적보고서", school, period_str), file_name=f"{school}_사업장_실적.xlsx", use_container_width=True)
+                        with cr3: st.download_button("♻️ 재활용 실적", data=create_legal_report_excel(df_school[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], "재활용 처리 실적보고서", school, period_str), file_name=f"{school}_재활용_실적.xlsx", use_container_width=True)
+                    with doc_tab3:
+                        st.info("💡 사업장 폐기물 재활용 수익 상계 증빙")
+                        st.download_button("📄 상계증빙서 다운로드", data=create_legal_report_excel(df_school[['날짜','학교명','사업장(kg)','재활용(kg)','재활용수익','사업장비용']], "재활용 상계처리 증빙", school, period_str), file_name=f"{school}_상계증빙.xlsx")
+                    with doc_tab4:
+                        st.info("💡 올바로 시스템 자동 전송")
+                        if st.button("🔗 올바로시스템 전자인계서 연동", type="primary", use_container_width=True):
+                            with st.spinner("한국환경공단 서버 통신 중..."):
+                                time.sleep(2)
+                            st.success("✅ 올바로시스템에 전자인계서 이관 완료!")
+
+            # ★ 탭5: ESG 탄소중립 보고서 출력
+            with main_tabs[4]:
+                st.subheader("🌍 ESG 탄소중립 보고서")
+                st.caption("환경부 음식물폐기물 퇴비화 재활용 매립 회피 계수 적용")
+                if not df_school_real.empty:
+                    r_act = df_school_real[df_school_real['수거여부']]
+                    total_kg = r_act['음식물(kg)'].sum()
+                    total_co2 = total_kg * CO2_FACTOR
+                    total_tree = int(total_co2 / TREE_FACTOR)
+                    total_supply = r_act['공급가'].sum()
+                    # 시각화 카드
+                    ec1, ec2, ec3, ec4 = st.columns(4)
+                    with ec1: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">♻️ 총 재활용량</div><div class="metric-value-recycle">{total_kg:,.0f}kg</div></div>', unsafe_allow_html=True)
+                    with ec2: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌍 CO₂ 감축량</div><div class="metric-value-recycle">{total_co2:,.1f}kg</div></div>', unsafe_allow_html=True)
+                    with ec3: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌲 소나무 식재 효과</div><div class="metric-value-recycle">{total_tree:,}그루</div></div>', unsafe_allow_html=True)
+                    with ec4: st.markdown(f'<div class="custom-card" style="text-align:center;"><div class="metric-title">💰 환경비용 절감</div><div class="metric-value-total">{total_supply:,.0f}원</div></div>', unsafe_allow_html=True)
+                    # 월별 탄소감축 차트
+                    st.write("---")
+                    st.markdown("**📊 월별 탄소감축 추이**")
+                    co2_monthly = r_act.groupby('월').agg(수거량=('음식물(kg)','sum')).reset_index()
+                    co2_monthly['CO₂감축(kg)'] = co2_monthly['수거량'] * CO2_FACTOR
+                    st.bar_chart(co2_monthly.set_index('월')['CO₂감축(kg)'], color="#34a853")
+                    # 보고서 다운로드 (엑셀 - 충주용산초 ESG 양식 기반)
+                    st.write("---")
+                    def create_esg_report_excel(school_name, df_data):
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                            wb = writer.book
+                            # 공통 서식
+                            title_fmt = wb.add_format({'bold':True,'font_size':18,'align':'center','valign':'vcenter','font_color':'#1a73e8','border':0})
+                            subtitle_fmt = wb.add_format({'bold':True,'font_size':12,'align':'center','bg_color':'#e8f5e9','border':1})
+                            header_fmt = wb.add_format({'bold':True,'font_size':11,'align':'center','bg_color':'#34a853','font_color':'white','border':1,'text_wrap':True})
+                            header_blue = wb.add_format({'bold':True,'font_size':11,'align':'center','bg_color':'#1a73e8','font_color':'white','border':1,'text_wrap':True})
+                            header_purple = wb.add_format({'bold':True,'font_size':11,'align':'center','bg_color':'#667eea','font_color':'white','border':1,'text_wrap':True})
+                            cell_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'text_wrap':True,'valign':'vcenter'})
+                            cell_left = wb.add_format({'font_size':10,'align':'left','border':1,'text_wrap':True,'valign':'vcenter'})
+                            num_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'num_format':'#,##0'})
+                            num_fmt1 = wb.add_format({'font_size':10,'align':'center','border':1,'num_format':'#,##0.0'})
+                            green_card = wb.add_format({'bold':True,'font_size':14,'align':'center','bg_color':'#34a853','font_color':'white','border':1})
+                            section_fmt = wb.add_format({'bold':True,'font_size':13,'bg_color':'#e8f5e9','border':1,'align':'left'})
+
+                            # ===== 시트1: 표지 =====
+                            ws1 = wb.add_worksheet('표지')
+                            ws1.set_column(0, 5, 18)
+                            ws1.merge_range('A3:F3', f'2025년 ESG 행정 실적보고서', title_fmt)
+                            ws1.merge_range('A5:F5', school_name, wb.add_format({'bold':True,'font_size':14,'align':'center'}))
+                            ws1.merge_range('A7:F7', f'보고 기간: 2025년 3월 ~ 12월', wb.add_format({'font_size':11,'align':'center','font_color':'#555'}))
+                            ws1.merge_range('A9:F9', 'Ⅰ. ESG 행정 실천 목표', section_fmt)
+                            esg_goals = [
+                                ['E (녹색 행정)','탄소중립·환경보전','음식물폐기물 재활용 퇴비화','탄소저감, 자원순환 실천'],
+                                ['S (사회적 행정)','안전·보건 구현','스쿨존 안전운행, 수거기사 안전교육','공공구매, 안전보건 지원'],
+                                ['G (투명 행정)','회계 투명성','정산 데이터 공개, 실시간 모니터링','자율적 내부통제, 행정 공개'],
+                            ]
+                            for ci, h in enumerate(['ESG 영역','목표','주요 추진 내용','세부 실천 사항']):
+                                ws1.write(10, ci, h, header_fmt)
+                            for ri, row in enumerate(esg_goals):
+                                for ci, val in enumerate(row):
+                                    ws1.write(11+ri, ci, val, cell_left)
+
+                            # ===== 시트2: E_녹색행정 실적 (PDCA) =====
+                            ws2 = wb.add_worksheet('E_녹색행정')
+                            ws2.set_column(0, 0, 15); ws2.set_column(1, 1, 22); ws2.set_column(2, 2, 18)
+                            ws2.set_column(3, 3, 40); ws2.set_column(4, 4, 12); ws2.set_column(5, 5, 15)
+                            ws2.merge_range('A1:F1', 'Ⅱ. E_녹색 행정 추진 실적 (2025년)', section_fmt)
+                            pdca_headers = ['계획(Plan)','제목','문서번호','실행(Do) 내용','확인(Check)','개선(Action)']
+                            for ci, h in enumerate(pdca_headers):
+                                ws2.write(2, ci, h, header_fmt)
+                            e_records = [
+                                ['E\n탄소 저감\n녹색 행정', '음식물폐기물\n퇴비화 재활용', '하영자원\n수거기록', f'총 수거량: {total_kg:,.0f}kg\n재활용업체: (주)혜인이엔씨\n재활용방법: 퇴비화 및 비료생산','이행','지속 확대'],
+                                ['','탄소감축 실적', 'ESG 보고', f'CO₂ 감축: {total_co2:,.1f}kg\n소나무 식재 효과: {total_tree:,}그루\n산정기준: 환경부 매립회피 {CO2_FACTOR}kgCO₂eq/kg','이행','성과 공유'],
+                                ['','공급가 정산', '월별 정산', f'총 공급가: {total_supply:,.0f}원\n단가: 162원/kg','이행','투명 정산'],
+                            ]
+                            for ri, row in enumerate(e_records):
+                                for ci, val in enumerate(row):
+                                    ws2.write(3+ri, ci, val, cell_left if ci==3 else cell_fmt)
+
+                            # 월별 수거 실적 테이블
+                            ws2.merge_range(f'A8:F8', '월별 음식물폐기물 수거 실적', subtitle_fmt)
+                            m_headers = ['월','수거일수','수거량(kg)','공급가(원)','CO₂감축(kg)','소나무(그루)']
+                            for ci, h in enumerate(m_headers):
+                                ws2.write(9, ci, h, header_blue)
+                            monthly_detail = df_data[df_data['수거여부']].groupby('월').agg(
+                                수거일수=('음식물(kg)','count'), 수거량=('음식물(kg)','sum'), 공급가=('공급가','sum')
+                            ).reset_index()
+                            monthly_detail['CO2'] = monthly_detail['수거량'] * CO2_FACTOR
+                            monthly_detail['소나무'] = (monthly_detail['CO2'] / TREE_FACTOR).astype(int)
+                            for ri, row in monthly_detail.iterrows():
+                                ws2.write(10+ri, 0, f"{int(row['월'])}월", cell_fmt)
+                                ws2.write(10+ri, 1, int(row['수거일수']), num_fmt)
+                                ws2.write(10+ri, 2, row['수거량'], num_fmt)
+                                ws2.write(10+ri, 3, row['공급가'], num_fmt)
+                                ws2.write(10+ri, 4, row['CO2'], num_fmt1)
+                                ws2.write(10+ri, 5, int(row['소나무']), num_fmt)
+                            # 합계
+                            tr = 10 + len(monthly_detail)
+                            ws2.write(tr, 0, '합계', green_card)
+                            ws2.write(tr, 1, int(monthly_detail['수거일수'].sum()), green_card)
+                            ws2.write(tr, 2, monthly_detail['수거량'].sum(), green_card)
+                            ws2.write(tr, 3, monthly_detail['공급가'].sum(), green_card)
+                            ws2.write(tr, 4, monthly_detail['CO2'].sum(), green_card)
+                            ws2.write(tr, 5, int(monthly_detail['소나무'].sum()), green_card)
+
+                            # ===== 시트3: S_사회적행정 =====
+                            ws3 = wb.add_worksheet('S_사회적행정')
+                            ws3.set_column(0, 5, 18)
+                            ws3.merge_range('A1:F1', 'Ⅲ. S_사회적 행정 추진 실적 (2025년)', section_fmt)
+                            for ci, h in enumerate(pdca_headers):
+                                ws3.write(2, ci, h, header_blue)
+                            s_records = [
+                                ['S\n사회적 가치\n행정','스쿨존 안전운행','수거차량 관제','수거차량 스쿨존 30km/h 이하 운행\n후방카메라 장착, 안전요원 동승','이행','지속 실천'],
+                                ['','수거기사 안전교육','안전점검 기록','운행 전 차량 안전점검 실시\n안전보건교육 정기 이수','이행','교육 강화'],
+                                ['','올바로시스템 연동','전자인계서','한국환경공단 올바로시스템 전자인계서 자동 전송','이행','시스템 고도화'],
+                            ]
+                            for ri, row in enumerate(s_records):
+                                for ci, val in enumerate(row):
+                                    ws3.write(3+ri, ci, val, cell_left if ci==3 else cell_fmt)
+
+                            # ===== 시트4: G_투명행정 =====
+                            ws4 = wb.add_worksheet('G_투명행정')
+                            ws4.set_column(0, 5, 18)
+                            ws4.merge_range('A1:F1', 'Ⅳ. G_투명 행정 추진 실적 (2025년)', section_fmt)
+                            for ci, h in enumerate(pdca_headers):
+                                ws4.write(2, ci, h, header_purple)
+                            g_records = [
+                                ['G\n투명 행정','ESG 실적 공개','학교홈페이지','하영자원 플랫폼 통해 실시간 수거 데이터 공개\n학교별 대시보드 제공','이행','지속'],
+                                ['','투명 정산','플랫폼 정산','월별 자동정산, 법정 양식 증빙 서류 자동 출력\n음식물/사업장/재활용 분리 정산','이행','자동화 확대'],
+                                ['','내부통제','감사 증빙','수거일지-정산서-세금계산서 자동 매칭\n부정 방지 시스템','이행','고도화'],
+                            ]
+                            for ri, row in enumerate(g_records):
+                                for ci, val in enumerate(row):
+                                    ws4.write(3+ri, ci, val, cell_left if ci==3 else cell_fmt)
+
+                        return output.getvalue()
+                    st.download_button("📥 ESG 행정 실적보고서 다운로드 (교육청 양식)", data=create_esg_report_excel(school, df_school_real),
+                                       file_name=f"{school}_ESG_행정실적보고서_2025.xlsx", use_container_width=True, type="primary")
+                    st.caption("※ 충주용산초 ESG 행정 실적보고서 양식(PDCA) 기반 | 표지 + E녹색행정 + S사회적행정 + G투명행정 4개 시트")
+                else:
+                    st.info("실제 수거 데이터가 있어야 ESG 보고서를 생성할 수 있습니다.")
         else:
             st.info("해당 학교의 수거 데이터가 아직 없습니다.")
 
@@ -585,29 +931,199 @@ else:
         office_schools = st.session_state.user_data.get("schools", [])
         st.title(f"🎓 {office_name} 관할 폐기물 통합 대시보드")
         st.caption(f"관할 학교: {len(office_schools)}개교")
+
+        # 실제 데이터 필터
+        df_office_real = df_real[df_real['학교명'].isin(office_schools)] if not df_real.empty else pd.DataFrame()
         df_office = df_all[df_all['학교명'].isin(office_schools)]
-        if not df_office.empty:
+
+        # --- ESG 상단 카드 (실제 데이터 우선) ---
+        if not df_office_real.empty:
+            r_act = df_office_real[df_office_real['수거여부']]
+            total_kg_o = r_act['음식물(kg)'].sum()
+            total_co2_o = total_kg_o * CO2_FACTOR
+            total_tree_o = int(total_co2_o / TREE_FACTOR)
+            oc1, oc2, oc3, oc4 = st.columns(4)
+            with oc1: st.metric("🗑️ 실제 수거량(2025)", f"{total_kg_o:,.0f} kg")
+            with oc2: st.metric("🌍 CO₂ 감축", f"{total_co2_o:,.1f} kg")
+            with oc3: st.metric("🌲 소나무 효과", f"{total_tree_o:,} 그루")
+            with oc4: st.metric("💰 총 공급가", f"{r_act['공급가'].sum():,.0f} 원")
+            st.markdown(f'<div style="background:linear-gradient(135deg,#667eea,#764ba2);padding:20px;border-radius:12px;color:white;margin:15px 0;"><h4 style="margin:0;color:white;">🌍 {office_name} ESG 탄소 저감 성과 (실제 데이터)</h4><p style="margin:5px 0;color:white;opacity:0.9;">산정기준: 환경부 음식물폐기물 퇴비화 매립회피 계수 {CO2_FACTOR} kgCO₂eq/kg | 소나무 {TREE_FACTOR}kg/그루/년</p><h2 style="margin:5px 0;color:white;">CO₂ 감축: {total_co2_o:,.1f}kg = 🌲 소나무 {total_tree_o:,}그루 식재 효과</h2></div>', unsafe_allow_html=True)
+        elif not df_office.empty:
             oc1, oc2, oc3, oc4 = st.columns(4)
             with oc1: st.metric("🗑️ 음식물 총 수거", f"{df_office['음식물(kg)'].sum():,} kg")
             with oc2: st.metric("🗄️ 사업장 총 수거", f"{df_office['사업장(kg)'].sum():,} kg")
             with oc3: st.metric("♻️ 재활용 총 수거", f"{df_office['재활용(kg)'].sum():,} kg")
             with oc4: st.metric("💰 총 정산 금액", f"{df_office['최종정산액'].sum():,} 원")
             tco2 = df_office['탄소감축량(kg)'].sum()
-            st.markdown(f'<div style="background:linear-gradient(135deg,#667eea,#764ba2);padding:20px;border-radius:12px;color:white;margin:15px 0;"><h4 style="margin:0;color:white;">🌍 {office_name} ESG 성과</h4><h2 style="margin:5px 0;color:white;">CO₂ 감축: {tco2:,.1f}kg (🌲 {int(tco2/6.6):,}그루)</h2></div>', unsafe_allow_html=True)
-            st.write("---")
-            st.subheader("📊 관할 학교별 배출 현황")
-            summary = df_office.groupby('학교명').agg({'음식물(kg)':'sum','사업장(kg)':'sum','재활용(kg)':'sum','최종정산액':'sum'}).reset_index().sort_values('최종정산액', ascending=False)
-            st.dataframe(summary, use_container_width=True)
-            st.write("---")
-            st.subheader("🔍 개별 학교 상세")
-            sel_sch = st.selectbox("학교 선택", office_schools)
-            df_sel = df_office[df_office['학교명']==sel_sch]
-            if not df_sel.empty:
-                sc1, sc2, sc3 = st.columns(3)
-                with sc1: st.metric("음식물", f"{df_sel['음식물(kg)'].sum():,} kg")
-                with sc2: st.metric("사업장", f"{df_sel['사업장(kg)'].sum():,} kg")
-                with sc3: st.metric("재활용", f"{df_sel['재활용(kg)'].sum():,} kg")
-                st.dataframe(df_sel[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액','상태']].tail(20), use_container_width=True)
+            st.markdown(f'<div style="background:linear-gradient(135deg,#667eea,#764ba2);padding:20px;border-radius:12px;color:white;margin:15px 0;"><h4 style="margin:0;color:white;">🌍 {office_name} ESG 성과</h4><h2 style="margin:5px 0;color:white;">CO₂ 감축: {tco2:,.1f}kg (🌲 {int(tco2/TREE_FACTOR):,}그루)</h2></div>', unsafe_allow_html=True)
+
+        has_edu_data = not df_office_real.empty or not df_office.empty
+        if has_edu_data:
+            edu_tabs = st.tabs(["📊 실제 수거 현황(2025)","📋 관할 학교 상세","📈 시뮬레이션 통계","🌍 ESG 탄소중립 보고서"])
+
+            # ★ 탭1: 실제 수거 현황
+            with edu_tabs[0]:
+                if not df_office_real.empty:
+                    st.markdown("#### 📊 관할 학교 실제 수거 현황 (2025)")
+                    # 학교별 요약 테이블
+                    school_sum = df_office_real[df_office_real['수거여부']].groupby('학교명').agg(
+                        수거일수=('음식물(kg)','count'), 총수거량=('음식물(kg)','sum'),
+                        총공급가=('공급가','sum'), CO2감축=('탄소감축량(kg)','sum')
+                    ).reset_index().sort_values('총수거량', ascending=False)
+                    school_sum['🌲소나무'] = (school_sum['CO2감축'] / TREE_FACTOR).astype(int)
+                    st.dataframe(school_sum, use_container_width=True, hide_index=True)
+                    # 학교별 수거량 차트
+                    st.bar_chart(school_sum.set_index('학교명')['총수거량'], color="#667eea")
+                    # 월별 하위탭
+                    st.write("---")
+                    st.markdown("**🗓️ 월별 상세**")
+                    o_months = sorted(df_office_real['월'].unique())
+                    o_mtabs = st.tabs([f"{m}월" for m in o_months])
+                    for omi, om in enumerate(o_months):
+                        with o_mtabs[omi]:
+                            df_om = df_office_real[(df_office_real['월']==om) & (df_office_real['수거여부'])]
+                            om_sum = df_om.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
+                            st.dataframe(om_sum, use_container_width=True, hide_index=True)
+                else:
+                    st.info("실제 수거 데이터가 없습니다.")
+
+            # ★ 탭2: 개별 학교 상세 조회
+            with edu_tabs[1]:
+                st.markdown("#### 🔍 개별 학교 상세 조회")
+                sel_edu_sch = st.selectbox("학교 선택", office_schools, key="edu_sel_school")
+                # 실제 데이터
+                if not df_office_real.empty:
+                    df_es_real = df_office_real[df_office_real['학교명']==sel_edu_sch]
+                    if not df_es_real.empty:
+                        es_active = df_es_real[df_es_real['수거여부']]
+                        es1, es2, es3 = st.columns(3)
+                        with es1: st.metric("실제 수거량", f"{es_active['음식물(kg)'].sum():,.0f} kg")
+                        with es2: st.metric("실제 공급가", f"{es_active['공급가'].sum():,.0f} 원")
+                        with es3: st.metric("CO₂ 감축", f"{es_active['탄소감축량(kg)'].sum():,.1f} kg")
+                        st.dataframe(df_es_real[['날짜','음식물(kg)','단가(원)','공급가','수거여부']].tail(31), use_container_width=True, hide_index=True)
+                # 시뮬레이션 데이터
+                df_es_sim = df_office[df_office['학교명']==sel_edu_sch] if not df_office.empty else pd.DataFrame()
+                if not df_es_sim.empty:
+                    st.write("---")
+                    st.caption("시뮬레이션 데이터 (참고)")
+                    sc1, sc2, sc3 = st.columns(3)
+                    with sc1: st.metric("음식물", f"{df_es_sim['음식물(kg)'].sum():,} kg")
+                    with sc2: st.metric("사업장", f"{df_es_sim['사업장(kg)'].sum():,} kg")
+                    with sc3: st.metric("재활용", f"{df_es_sim['재활용(kg)'].sum():,} kg")
+
+            # 탭3: 시뮬레이션 통계
+            with edu_tabs[2]:
+                if not df_office.empty:
+                    st.markdown("#### 📈 시뮬레이션 통계 (전체 관할)")
+                    summary = df_office.groupby('학교명').agg({'음식물(kg)':'sum','사업장(kg)':'sum','재활용(kg)':'sum','최종정산액':'sum'}).reset_index().sort_values('최종정산액', ascending=False)
+                    st.dataframe(summary, use_container_width=True, hide_index=True)
+                else:
+                    st.info("시뮬레이션 데이터가 없습니다.")
+
+            # ★ 탭4: ESG 탄소중립 보고서 출력
+            with edu_tabs[3]:
+                st.subheader("🌍 교육청 ESG 탄소중립 보고서")
+                if not df_office_real.empty:
+                    r_act_e = df_office_real[df_office_real['수거여부']]
+                    e_total_kg = r_act_e['음식물(kg)'].sum()
+                    e_total_co2 = e_total_kg * CO2_FACTOR
+                    e_total_tree = int(e_total_co2 / TREE_FACTOR)
+                    e_total_supply = r_act_e['공급가'].sum()
+                    e_school_count = r_act_e['학교명'].nunique()
+                    # 시각화 카드
+                    ee1, ee2, ee3, ee4 = st.columns(4)
+                    with ee1: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🏫 관할 학교</div><div class="metric-value-recycle">{e_school_count}개교</div></div>', unsafe_allow_html=True)
+                    with ee2: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">♻️ 총 재활용량</div><div class="metric-value-recycle">{e_total_kg:,.0f}kg</div></div>', unsafe_allow_html=True)
+                    with ee3: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌍 CO₂ 감축</div><div class="metric-value-recycle">{e_total_co2:,.1f}kg</div></div>', unsafe_allow_html=True)
+                    with ee4: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌲 소나무 효과</div><div class="metric-value-recycle">{e_total_tree:,}그루</div></div>', unsafe_allow_html=True)
+                    # 학교별 탄소감축 차트
+                    st.write("---")
+                    st.markdown("**📊 학교별 탄소감축 기여도**")
+                    eco_by_school = r_act_e.groupby('학교명').agg(수거량=('음식물(kg)','sum')).reset_index()
+                    eco_by_school['CO₂감축(kg)'] = eco_by_school['수거량'] * CO2_FACTOR
+                    eco_by_school = eco_by_school.sort_values('CO₂감축(kg)', ascending=False)
+                    st.bar_chart(eco_by_school.set_index('학교명')['CO₂감축(kg)'], color="#34a853")
+                    # 월별 추이
+                    st.markdown("**📊 월별 탄소감축 추이**")
+                    eco_monthly = r_act_e.groupby('월').agg(수거량=('음식물(kg)','sum')).reset_index()
+                    eco_monthly['CO₂감축(kg)'] = eco_monthly['수거량'] * CO2_FACTOR
+                    st.bar_chart(eco_monthly.set_index('월')['CO₂감축(kg)'], color="#667eea")
+                    # 보고서 다운로드
+                    st.write("---")
+                    def create_edu_esg_excel(office, schools_data):
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                            wb = writer.book
+                            title_fmt = wb.add_format({'bold':True,'font_size':18,'align':'center','font_color':'#667eea'})
+                            header_fmt = wb.add_format({'bold':True,'font_size':11,'align':'center','bg_color':'#667eea','font_color':'white','border':1,'text_wrap':True})
+                            header_green = wb.add_format({'bold':True,'font_size':11,'align':'center','bg_color':'#34a853','font_color':'white','border':1,'text_wrap':True})
+                            cell_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'text_wrap':True,'valign':'vcenter'})
+                            cell_left = wb.add_format({'font_size':10,'align':'left','border':1,'text_wrap':True,'valign':'vcenter'})
+                            num_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'num_format':'#,##0'})
+                            num_fmt1 = wb.add_format({'font_size':10,'align':'center','border':1,'num_format':'#,##0.0'})
+                            green_total = wb.add_format({'bold':True,'font_size':11,'align':'center','bg_color':'#34a853','font_color':'white','border':1,'num_format':'#,##0'})
+                            section_fmt = wb.add_format({'bold':True,'font_size':13,'bg_color':'#e8eef9','border':1})
+
+                            # 시트1: ESG 요약 (표지+목표)
+                            ws1 = wb.add_worksheet('ESG 요약')
+                            ws1.set_column(0, 5, 18)
+                            ws1.merge_range('A2:F2', f'{office} 2025년 ESG 탄소중립 보고서', title_fmt)
+                            ws1.merge_range('A4:F4', f'보고 기간: 2025.3~12 | 관할: {e_school_count}개교 | 작성일: {CURRENT_DATE}', wb.add_format({'font_size':11,'align':'center','font_color':'#555'}))
+                            # 요약 수치
+                            ws1.merge_range('A6:F6', 'ESG 성과 요약', section_fmt)
+                            summary_items = [['총 수거량',f'{e_total_kg:,.0f} kg'],['CO₂ 감축량',f'{e_total_co2:,.1f} kg'],
+                                             ['소나무 식재 효과',f'{e_total_tree:,} 그루'],['총 공급가',f'{e_total_supply:,.0f} 원'],
+                                             ['산정기준',f'환경부 매립회피 계수 {CO2_FACTOR} kgCO₂eq/kg'],['재활용 방법','퇴비화 및 비료생산'],['재활용 업체','(주)혜인이엔씨']]
+                            for ci, h in enumerate(['항목','내용']): ws1.write(7, ci, h, header_fmt)
+                            for ri, row in enumerate(summary_items):
+                                ws1.write(8+ri, 0, row[0], cell_fmt); ws1.write(8+ri, 1, row[1], cell_left)
+
+                            # 시트2: 학교별 상세 (서식 적용)
+                            ws2 = wb.add_worksheet('학교별 상세')
+                            ws2.set_column(0, 0, 25); ws2.set_column(1, 5, 15)
+                            ws2.merge_range('A1:F1', '관할 학교별 음식물폐기물 재활용 실적', section_fmt)
+                            sch_headers = ['학교명','수거일수','수거량(kg)','공급가(원)','CO₂감축(kg)','소나무(그루)']
+                            for ci, h in enumerate(sch_headers): ws2.write(2, ci, h, header_green)
+                            school_detail = schools_data[schools_data['수거여부']].groupby('학교명').agg(
+                                수거일수=('음식물(kg)','count'), 수거량=('음식물(kg)','sum'), 공급가=('공급가','sum')
+                            ).reset_index().sort_values('수거량', ascending=False)
+                            school_detail['CO2'] = school_detail['수거량'] * CO2_FACTOR
+                            school_detail['소나무'] = (school_detail['CO2'] / TREE_FACTOR).astype(int)
+                            for ri, row in school_detail.iterrows():
+                                ws2.write(3+ri, 0, row['학교명'], cell_left)
+                                ws2.write(3+ri, 1, int(row['수거일수']), num_fmt)
+                                ws2.write(3+ri, 2, row['수거량'], num_fmt)
+                                ws2.write(3+ri, 3, row['공급가'], num_fmt)
+                                ws2.write(3+ri, 4, row['CO2'], num_fmt1)
+                                ws2.write(3+ri, 5, int(row['소나무']), num_fmt)
+                            tr2 = 3 + len(school_detail)
+                            ws2.write(tr2, 0, '합계', green_total)
+                            for ci, col in enumerate(['수거일수','수거량','공급가','CO2','소나무'],1):
+                                ws2.write(tr2, ci, int(school_detail[col].sum()) if col in ['수거일수','소나무'] else school_detail[col].sum(), green_total)
+
+                            # 시트3: 월별 추이
+                            ws3 = wb.add_worksheet('월별 추이')
+                            ws3.set_column(0, 5, 15)
+                            ws3.merge_range('A1:F1', '월별 음식물폐기물 재활용 추이', section_fmt)
+                            for ci, h in enumerate(['월','수거일수','수거량(kg)','공급가(원)','CO₂감축(kg)','소나무(그루)']): ws3.write(2, ci, h, header_fmt)
+                            monthly = schools_data[schools_data['수거여부']].groupby('월').agg(수거일수=('음식물(kg)','count'),수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
+                            monthly['CO2'] = monthly['수거량'] * CO2_FACTOR
+                            monthly['소나무'] = (monthly['CO2'] / TREE_FACTOR).astype(int)
+                            for ri, row in monthly.iterrows():
+                                ws3.write(3+ri, 0, f"{int(row['월'])}월", cell_fmt)
+                                ws3.write(3+ri, 1, int(row['수거일수']), num_fmt)
+                                ws3.write(3+ri, 2, row['수거량'], num_fmt)
+                                ws3.write(3+ri, 3, row['공급가'], num_fmt)
+                                ws3.write(3+ri, 4, row['CO2'], num_fmt1)
+                                ws3.write(3+ri, 5, int(row['소나무']), num_fmt)
+                        return output.getvalue()
+                    st.download_button("📥 교육청 ESG 행정 실적보고서 다운로드 (엑셀)",
+                                       data=create_edu_esg_excel(office_name, df_office_real),
+                                       file_name=f"{office_name}_ESG_행정실적보고서_2025.xlsx",
+                                       use_container_width=True, type="primary")
+                    st.caption("※ ESG 행정 실적보고서 양식(PDCA) 기반 | ESG요약 + 학교별상세 + 월별추이 3개 시트")
+                else:
+                    st.info("실제 수거 데이터가 있어야 ESG 보고서를 생성할 수 있습니다.")
         else:
             st.info("관할 학교의 수거 데이터가 아직 없습니다.")
 
