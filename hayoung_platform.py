@@ -1045,6 +1045,42 @@ else:
             cb1, cb2 = st.columns(2)
             with cb1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
             with cb2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
+            # ★ [신규] 본사 월별 거래명세서 일괄 PDF 생성
+            st.write("---")
+            st.markdown("**📄 월별 거래명세서 PDF 일괄 생성**")
+            adm_pdf_c1, adm_pdf_c2, adm_pdf_c3 = st.columns(3)
+            with adm_pdf_c1:
+                adm_pdf_yr = st.selectbox("년도", sorted(df_all['년도'].unique(), reverse=True) if not df_all.empty else [CURRENT_YEAR], key="adm_pdf_yr")
+            with adm_pdf_c2:
+                adm_pdf_month = st.selectbox("월", list(range(1,13)), format_func=lambda x: f"{x}월", key="adm_pdf_month")
+            with adm_pdf_c3:
+                adm_pdf_target = st.selectbox("대상", ["전체(통합)"] + all_schools_sim, key="adm_pdf_target")
+            if st.button("📄 거래명세서 PDF 생성", type="primary", use_container_width=True, key="adm_batch_pdf"):
+                try:
+                    df_adm_m = df_all[(df_all['년도']==adm_pdf_yr)]
+                    month_str = f"{adm_pdf_yr}-{adm_pdf_month:02d}"
+                    df_adm_m = df_adm_m[df_adm_m['월별']==month_str] if month_str in df_all['월별'].values else df_adm_m[df_adm_m['월별'].str.contains(str(adm_pdf_month))]
+                    if adm_pdf_target != "전체(통합)":
+                        df_adm_m = df_adm_m[df_adm_m['학교명']==adm_pdf_target]
+                    target_name = adm_pdf_target if adm_pdf_target != "전체(통합)" else "전체"
+                    if not df_adm_m.empty:
+                        adm_pdf_data = create_monthly_invoice_pdf("하영자원(본사)", target_name, adm_pdf_month, str(adm_pdf_yr), df_adm_m)
+                        st.session_state['adm_batch_pdf_data'] = adm_pdf_data
+                        st.session_state['adm_batch_pdf_fname'] = f"하영자원_{target_name}_{adm_pdf_month}월_거래명세서.pdf"
+                        st.success(f"✅ {target_name} {adm_pdf_month}월 거래명세서 PDF 생성 완료! ({len(df_adm_m)}건)")
+                    else:
+                        st.warning(f"⚠️ {adm_pdf_yr}년 {adm_pdf_month}월 해당 데이터가 없습니다.")
+                except Exception as e:
+                    st.error(f"PDF 생성 실패: {e}")
+            if 'adm_batch_pdf_data' in st.session_state:
+                st.download_button(
+                    f"📥 {st.session_state.get('adm_batch_pdf_fname','거래명세서.pdf')} 다운로드",
+                    data=st.session_state['adm_batch_pdf_data'],
+                    file_name=st.session_state.get('adm_batch_pdf_fname','거래명세서.pdf'),
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="adm_batch_pdf_dl"
+                )
         if tab_food is not None:
          with tab_food:
             sel_school_f = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_food_school")
@@ -2547,6 +2583,37 @@ else:
 - 공급가액: {supply:,}원 | 세액: {vat:,.0f}원
 - 승인번호: HT-{datetime.now().strftime('%Y%m%d')}-{bm:02d}-00{bi+1}
                                 """)
+                            # ★ [신규] 월별 거래명세서 PDF 생성 + 다운로드
+                            st.write("---")
+                            st.markdown(f"**📄 {bm}월 거래명세서 PDF**")
+                            va_pdf_cols = st.columns(2)
+                            va_pdf_schools = sorted(df_bm['학교명'].unique())
+                            va_pdf_school_sel = st.selectbox(f"{bm}월 거래처 선택", ["전체(통합)"] + list(va_pdf_schools), key=f"va_pdf_sch_{bm}")
+                            with va_pdf_cols[0]:
+                                if st.button(f"📄 {bm}월 거래명세서 생성", type="primary", use_container_width=True, key=f"va_gen_pdf_{bm}"):
+                                    try:
+                                        if va_pdf_school_sel == "전체(통합)":
+                                            pdf_target_name = va_vendor
+                                            pdf_df = df_bm
+                                        else:
+                                            pdf_target_name = va_pdf_school_sel
+                                            pdf_df = df_bm[df_bm['학교명']==va_pdf_school_sel]
+                                        va_pdf_data = create_monthly_invoice_pdf(va_vendor, pdf_target_name, bm, str(CURRENT_YEAR), pdf_df)
+                                        st.session_state[f'va_pdf_ready_{bm}'] = va_pdf_data
+                                        st.session_state[f'va_pdf_fname_{bm}'] = f"{va_vendor}_{pdf_target_name}_{bm}월_거래명세서.pdf"
+                                        st.success(f"✅ {pdf_target_name} {bm}월 거래명세서 PDF 생성 완료!")
+                                    except Exception as e:
+                                        st.error(f"PDF 생성 실패: {e}")
+                            with va_pdf_cols[1]:
+                                if f'va_pdf_ready_{bm}' in st.session_state:
+                                    st.download_button(
+                                        f"📥 {bm}월 명세서 다운로드",
+                                        data=st.session_state[f'va_pdf_ready_{bm}'],
+                                        file_name=st.session_state.get(f'va_pdf_fname_{bm}', f'{bm}월_거래명세서.pdf'),
+                                        mime="application/pdf",
+                                        use_container_width=True,
+                                        key=f"va_dl_pdf_{bm}"
+                                    )
                 else:
                     st.info("수거 데이터가 없습니다.")
             else:
