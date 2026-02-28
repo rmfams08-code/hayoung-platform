@@ -794,24 +794,26 @@ def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
     c.setFillColor(colors.Color(0.1,0.4,0.7))
     c.rect(15*mm, table_y, w-30*mm, 7*mm, fill=1, stroke=0)
     c.setFillColor(colors.white)
-    c.setFont(KR_FONT, 8)
-    cols = [18, 38, 70, 92, 115, 145]
-    headers = ['No','수거일','단위(L)','단가(원)','공급가(원)','재활용방법']
+    c.setFont(KR_FONT, 7)
+    cols = [16, 30, 58, 73, 92, 113, 140, 166]
+    headers = ['No','수거일','단위(L)','단가(원)','공급가(원)','재활용방법','재활용자','비고']
     for ci, hd in enumerate(headers):
         c.drawString(cols[ci]*mm, table_y+2*mm, hd)
     # 데이터 행
     c.setFillColor(colors.black)
-    c.setFont(KR_FONT, 8)
+    c.setFont(KR_FONT, 7)
     row_y = table_y - 6*mm
     total_qty = 0; total_amt = 0
     for ri, (_, row) in enumerate(df_pdf.iterrows()):
         if row_y < 35*mm:
             c.showPage(); row_y = h - 25*mm
-            c.setFont(KR_FONT, 8)
+            c.setFont(KR_FONT, 7)
         qty = row.get('단위(L)', row.get('음식물(kg)', 0))
         price = row.get('단가', row.get('단가(원)', 170))
         supply = row.get('공급가', qty * price if qty else 0)
         date_str = str(row.get('수거일', row.get('날짜', '')))
+        recycler = str(row.get('재활용자', ''))[:10]
+        remark = str(row.get('비고', ''))[:8]
         if ri % 2 == 0:
             c.setFillColor(colors.Color(0.95,0.97,1.0))
             c.rect(15*mm, row_y-1.5*mm, w-30*mm, 5.5*mm, fill=1, stroke=0)
@@ -822,6 +824,8 @@ def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
         c.drawString(cols[3]*mm, row_y+1*mm, f'{price:,.0f}')
         c.drawString(cols[4]*mm, row_y+1*mm, f'{supply:,.0f}' if supply else '-')
         c.drawString(cols[5]*mm, row_y+1*mm, str(row.get('재활용방법', ''))[:10])
+        c.drawString(cols[6]*mm, row_y+1*mm, recycler)
+        c.drawString(cols[7]*mm, row_y+1*mm, remark)
         if qty: total_qty += qty
         if supply: total_amt += supply
         row_y -= 5.5*mm
@@ -829,10 +833,12 @@ def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
     row_y -= 2*mm
     c.setFillColor(colors.Color(0.1,0.4,0.7))
     c.rect(15*mm, row_y-1.5*mm, w-30*mm, 7*mm, fill=1, stroke=0)
-    c.setFillColor(colors.white); c.setFont(KR_FONT, 9)
+    c.setFillColor(colors.white); c.setFont(KR_FONT, 8)
     c.drawString(cols[0]*mm, row_y+1*mm, '합  계')
     c.drawString(cols[2]*mm, row_y+1*mm, f'{total_qty:,.0f}')
     c.drawString(cols[4]*mm, row_y+1*mm, f'{total_amt:,.0f}')
+    c.drawString(cols[5]*mm, row_y+1*mm, '-')
+    c.drawString(cols[6]*mm, row_y+1*mm, '-')
     # 하단 서명
     c.setFillColor(colors.black); c.setFont(KR_FONT, 8)
     c.drawString(20*mm, 25*mm, f'위 금액을 거래명세서로 발행합니다.')
