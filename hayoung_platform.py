@@ -467,19 +467,38 @@ def create_allbaro_report(df_real, report_role, entity_name, year, item_filter=N
         ws2.merge_range(row_idx, 1, row_idx, 2, '', cf)
         ws2.write(row_idx, 3, total_all, wb.add_format({'bold':True,'font_size':11,'align':'center','border':1,'num_format':'#,##0','bg_color':'#e3f2fd'}))
         ws2.write(row_idx, 5, total_all, wb.add_format({'bold':True,'font_size':11,'align':'center','border':1,'num_format':'#,##0','bg_color':'#e3f2fd'}))
-        # 시트3~: 거래처(학교)별 시트
-        show_cols = ['날짜','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간'] if c in df.columns]
-        schools_in = sorted(df['학교명'].unique()) if '학교명' in df.columns else []
-        for sch in schools_in:
-            df_sch = df[df['학교명']==sch]
-            safe_name = str(sch)[:31]  # 시트명 31자 제한
-            valid_cols = [c for c in show_cols if c in df_sch.columns]
-            df_sch[valid_cols].to_excel(writer, index=False, sheet_name=safe_name, startrow=2)
-            ws_s = writer.sheets[safe_name]
-            ws_s.merge_range(0, 0, 0, len(valid_cols)-1, f'{sch} - {year}년 수거 실적', tf)
-            total_kg = df_sch['음식물(kg)'].sum() if '음식물(kg)' in df_sch.columns else 0
-            total_sup = df_sch['공급가'].sum() if '공급가' in df_sch.columns else 0
-            ws_s.write(1, 0, f'수거량합계: {total_kg:,.0f}kg | 공급가합계: {total_sup:,.0f}원 | 건수: {len(df_sch)}건', lf)
+        # 시트3: 업체별 연간발생량
+        ws3 = wb.add_worksheet('업체별연간발생량')
+        ws3.set_column(0,6,18)
+        ws3.merge_range('A1:G1', f'{entity_name} {year}년 업체별 연간 폐기물 발생량', tf)
+        ab_headers = ['업체(학교)명','연간수거량(kg)','연간공급가(원)','수거건수','월평균수거량(kg)','주요처리방법','비고']
+        for ci, h in enumerate(ab_headers): ws3.write(2, ci, h, hf)
+        if '학교명' in df.columns:
+            schools_in = sorted(df['학교명'].unique())
+            for ri, sch in enumerate(schools_in):
+                df_sch = df[df['학교명']==sch]
+                total_kg = df_sch['음식물(kg)'].sum() if '음식물(kg)' in df_sch.columns else 0
+                total_sup = df_sch['공급가'].sum() if '공급가' in df_sch.columns else 0
+                cnt = len(df_sch)
+                active_months = df_sch['월'].nunique() if '월' in df_sch.columns else 1
+                avg_monthly = total_kg / max(active_months, 1)
+                method = str(df_sch['재활용방법'].mode().iloc[0]) if '재활용방법' in df_sch.columns and not df_sch['재활용방법'].mode().empty else ''
+                ws3.write(3+ri, 0, sch, cf)
+                ws3.write(3+ri, 1, total_kg, nf)
+                ws3.write(3+ri, 2, total_sup, nf)
+                ws3.write(3+ri, 3, cnt, nf)
+                ws3.write(3+ri, 4, round(avg_monthly,1), nf)
+                ws3.write(3+ri, 5, method, cf)
+                ws3.write(3+ri, 6, '', cf)
+            # 합계행
+            tr = 3 + len(schools_in)
+            total_all_kg = df['음식물(kg)'].sum() if '음식물(kg)' in df.columns else 0
+            total_all_sup = df['공급가'].sum() if '공급가' in df.columns else 0
+            sum_fmt = wb.add_format({'bold':True,'font_size':11,'align':'center','border':1,'num_format':'#,##0','bg_color':'#e3f2fd'})
+            ws3.write(tr, 0, '합계', sum_fmt)
+            ws3.write(tr, 1, total_all_kg, sum_fmt)
+            ws3.write(tr, 2, total_all_sup, sum_fmt)
+            ws3.write(tr, 3, len(df), sum_fmt)
     return output.getvalue()
 
 
@@ -496,24 +515,28 @@ if not st.session_state.logged_in:
         <p class="subtitle">하영자원 데이터플랫폼이 여러분과 함께합니다.</p>
     </div>
     """, unsafe_allow_html=True)
-    col1, col2, col3 = st.columns(3, gap="large")
+    col1, col2, col3, col4 = st.columns(4, gap="medium")
     with col1:
-        st.markdown('<div class="role-card"><div class="icon">🏢</div><div class="title">관리자</div><div class="desc">하영자원 본사 관리자<br>통합 관제 및 정산 센터</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="role-card"><div class="icon">🏢</div><div class="title">관리자</div><div class="desc">하영자원 본사<br>통합 관제</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
         if st.button("관리자 로그인", key="btn_admin", use_container_width=True, type="primary"):
             st.session_state.login_group = "admin"; st.rerun()
     with col2:
-        st.markdown('<div class="role-card"><div class="icon">🏫</div><div class="title">교육청 / 학교</div><div class="desc">교육지원청 담당자<br>학교 행정실 담당자</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="role-card"><div class="icon">🏫</div><div class="title">교육청/학교</div><div class="desc">교육지원청<br>학교 행정실</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
         if st.button("교육청/학교 로그인", key="btn_edu", use_container_width=True, type="primary"):
             st.session_state.login_group = "edu_school"; st.rerun()
     with col3:
-        st.markdown('<div class="role-card"><div class="icon">🚚</div><div class="title">수거업체</div><div class="desc">수거 기사 현장 앱<br>업체 관리자</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
-        if st.button("수거업체 로그인", key="btn_driver", use_container_width=True, type="primary"):
+        st.markdown('<div class="role-card"><div class="icon">🚚</div><div class="title">수거기사</div><div class="desc">수거 기사<br>현장 앱</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
+        if st.button("수거기사 로그인", key="btn_driver", use_container_width=True, type="primary"):
             st.session_state.login_group = "driver"; st.rerun()
+    with col4:
+        st.markdown('<div class="role-card"><div class="icon">🤝</div><div class="title">외주업체</div><div class="desc">외주업체<br>관리자</div><div class="arrow">→</div></div>', unsafe_allow_html=True)
+        if st.button("외주업체 로그인", key="btn_vendor", use_container_width=True, type="primary"):
+            st.session_state.login_group = "vendor_admin"; st.rerun()
 
     if st.session_state.login_group:
         st.write("---")
         group = st.session_state.login_group
-        labels = {"admin":("🏢 관리자 로그인","#1a73e8"),"edu_school":("🏫 교육청/학교 로그인","#34a853"),"driver":("🚚 수거업체 로그인","#ea4335")}
+        labels = {"admin":("🏢 관리자 로그인","#1a73e8"),"edu_school":("🏫 교육청/학교 로그인","#34a853"),"driver":("🚚 수거기사 로그인","#ea4335"),"vendor_admin":("🤝 외주업체 관리자 로그인","#ff6d00")}
         label, color = labels[group]
         _, login_col, _ = st.columns([1,2,1])
         with login_col:
@@ -529,7 +552,8 @@ if not st.session_state.logged_in:
                     if account:
                         valid = (group=="admin" and account["role"]=="admin") or \
                                 (group=="edu_school" and account["role"] in ("school","edu_office")) or \
-                                (group=="driver" and account["role"]=="driver")
+                                (group=="driver" and account["role"]=="driver") or \
+                                (group=="vendor_admin" and account["role"]=="vendor_admin")
                         if valid:
                             st.session_state.logged_in = True
                             st.session_state.user_role = account["role"]
@@ -1111,99 +1135,11 @@ else:
                 })
             st.dataframe(pd.DataFrame(vendor_rows), use_container_width=True, hide_index=True)
 
-            # ★ 업체 선택 버튼 방식
+            # ★ 안전평가 결과서 + 청구서 (업체 선택 방식)
             st.write("---")
-            st.markdown("#### 🏢 업체별 대시보드")
-            vendor_list = list(VENDOR_DATA.keys())
-            vb_cols = st.columns(len(vendor_list))
-            for vi, vn in enumerate(vendor_list):
-                with vb_cols[vi]:
-                    if st.button(f"🏢 {vn}", use_container_width=True, key=f"vbtn_{vn}"):
-                        st.session_state['selected_vendor'] = vn
-            sel_v = st.session_state.get('selected_vendor', vendor_list[0])
+            st.markdown("**📋 안전평가 / 💰 청구서 다운로드**")
+            sel_v = st.selectbox("업체 선택", list(VENDOR_DATA.keys()), key="admin_vendor_sel_simple")
             vinfo = VENDOR_DATA[sel_v]
-
-            # ★ 업체 대시보드
-            st.markdown(f'<div style="background:linear-gradient(135deg,#1a73e8,#4285f4);padding:16px;border-radius:12px;color:white;margin:10px 0;"><h3 style="margin:0;color:white;">🏢 {sel_v} 대시보드</h3><p style="margin:5px 0 0;opacity:0.9;">대표: {vinfo["대표"]} | 사업자: {vinfo["사업자번호"]} | ☎ {vinfo["연락처"]}</p></div>', unsafe_allow_html=True)
-
-            # 대시보드 하위탭
-            vd_tabs = st.tabs(["📊 업체 현황","🏫 담당거래처 관리","🚚 차량/기사","📋 안전평가","💰 정산 청구서"])
-
-            # ★ 하위탭1: 업체 현황
-            with vd_tabs[0]:
-                vi1, vi2, vi3, vi4 = st.columns(4)
-                with vi1: st.metric("안전점수", f"{vinfo['안전점수']}점")
-                with vi2: st.metric("담당학교", f"{len(vinfo['schools'])}개교")
-                with vi3: st.metric("계약만료", vinfo['계약만료'])
-                with vi4: st.metric("운행상태", vinfo['상태'])
-                # 수거 실적
-                if not df_real.empty:
-                    df_vr = df_real[(df_real['학교명'].isin(vinfo['schools'])) & (df_real['수거여부'])]
-                    if not df_vr.empty:
-                        st.markdown("**📊 수거 실적 요약**")
-                        vr_sum = df_vr.groupby('학교명').agg(수거일수=('음식물(kg)','count'),수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
-                        st.dataframe(vr_sum, use_container_width=True, hide_index=True)
-                        st.bar_chart(vr_sum.set_index('학교명')['수거량'], color="#1a73e8")
-
-            # ★ 하위탭2: 담당거래처(학교) 등록 및 관리
-            with vd_tabs[1]:
-                st.markdown(f"#### 🏫 {sel_v} 담당 거래처(학교) 관리")
-                current_schools = list(vinfo['schools'])
-                st.markdown("**현재 등록된 거래처:**")
-                for si, sch in enumerate(current_schools):
-                    sc1, sc2 = st.columns([4,1])
-                    with sc1: st.write(f"  {si+1}. {sch}")
-                    with sc2:
-                        if st.button("❌", key=f"del_sch_{sel_v}_{si}", help="거래처 삭제"):
-                            VENDOR_DATA[sel_v]['schools'].remove(sch)
-                            st.rerun()
-                st.write("---")
-                st.markdown("**거래처 추가**")
-                available = [s for s in SCHOOL_LIST if s not in current_schools]
-                new_school = st.selectbox("추가할 학교 선택", ["선택하세요"] + available, key=f"add_sch_{sel_v}")
-                if st.button("➕ 거래처 추가", key=f"add_btn_{sel_v}", use_container_width=True):
-                    if new_school != "선택하세요":
-                        VENDOR_DATA[sel_v]['schools'].append(new_school)
-                        st.success(f"✅ {new_school} 추가 완료!")
-                        st.rerun()
-
-            # ★ 하위탭3: 차량/기사 정보 + 타임라인
-            with vd_tabs[2]:
-                driver_names = [DRIVER_ACCOUNTS[d]['name'] for d in vinfo['drivers'] if d in DRIVER_ACCOUNTS]
-                st.markdown(f'<div class="safety-box">🚛 차량: {" | ".join(vinfo["차량"])} | 👨‍✈️ 기사: {", ".join(driver_names)} | 🏫 배차: {len(vinfo["schools"])}곳</div>', unsafe_allow_html=True)
-                st.markdown("**🚚 오늘의 실시간 이동 동선**")
-                st.markdown("✅ 08:30 [출발 전 점검] 차량 후방카메라 및 안전요원 탑승 확인 완료")
-                st.markdown(f"➡️ 10:30 [이동 중] {vinfo['schools'][0]}로 이동 중 (GPS 정상)")
-                # 거래처별 수거현황 (기존 유지)
-                st.write("---")
-                st.markdown(f"**📊 {sel_v} 거래처별 수거 현황**")
-                v_schools_list = vinfo['schools']
-                if not df_real.empty:
-                    df_v_real = df_real[df_real['학교명'].isin(v_schools_list)]
-                    if not df_v_real.empty:
-                        sel_v_school = st.selectbox("거래처(학교) 선택", ["전체"] + v_schools_list, key="vendor_school_sel")
-                        df_vs = df_v_real if sel_v_school == "전체" else df_v_real[df_v_real['학교명']==sel_v_school]
-                        v_years = sorted(df_vs['년도'].unique(), reverse=True)
-                        sel_v_year = st.selectbox("년도 선택", v_years, key="vendor_year_sel") if v_years else None
-                        if sel_v_year:
-                            df_vy = df_vs[df_vs['년도']==sel_v_year]
-                            v_m_list = sorted(df_vy['월'].unique())
-                            v_m_tabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}월" for m in v_m_list])
-                            with v_m_tabs[0]:
-                                vy_sum = df_vy[df_vy['수거여부']].groupby('학교명').agg(수거일수=('음식물(kg)','count'),수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
-                                st.dataframe(vy_sum, use_container_width=True, hide_index=True)
-                            for vmi, vm in enumerate(v_m_list):
-                                with v_m_tabs[vmi+1]:
-                                    df_vmm = df_vy[(df_vy['월']==vm) & (df_vy['수거여부'])]
-                                    if sel_v_school == "전체":
-                                        vmm_s = df_vmm.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
-                                        st.dataframe(vmm_s, use_container_width=True, hide_index=True)
-                                    else:
-                                        st.dataframe(df_vmm[['날짜','학교명','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간'] if c in df_vmm.columns]], use_container_width=True, hide_index=True)
-                    else:
-                        st.info(f"{sel_v} 담당 학교의 실제 수거 데이터가 없습니다.")
-                else:
-                    st.info("실제 수거 데이터가 로드되지 않았습니다.")
 
             # 안전평가 함수 정의 (탭 밖에서)
             def create_safety_report_excel(vendor_name, vdata):
@@ -1262,56 +1198,12 @@ else:
                     ws.write(total_r, 4, str(total_score), wb.add_format({'bold':True,'font_size':14,'align':'center','border':1,'font_color':'#c62828'}))
                     ws.write(total_r, 5, grade, wb.add_format({'bold':True,'font_size':12,'align':'center','border':1}))
                 return output.getvalue()
-            with vd_tabs[3]:
-                st.markdown(f"#### 📋 {sel_v} 안전평가 결과서")
+            ac1, ac2 = st.columns(2)
+            with ac1:
                 st.download_button("📋 안전평가 결과서 다운로드", data=create_safety_report_excel(sel_v, VENDOR_DATA[sel_v]),
                                    file_name=f"{sel_v}_안전평가결과서_{CURRENT_DATE}.xlsx", use_container_width=True)
-
-            # ★ 하위탭5: 월별 정산 대금 청구서 발행
-            with vd_tabs[4]:
-                st.markdown(f"#### 💰 {sel_v} 월별 정산 대금 청구서")
-                vb_info = VENDOR_DATA[sel_v]
-                if not df_real.empty:
-                    df_vb = df_real[(df_real['학교명'].isin(vb_info['schools'])) & (df_real['수거여부'])]
-                    if not df_vb.empty:
-                        vb_months = sorted(df_vb['월'].unique())
-                        vb_tabs = st.tabs([f"🗓️ {m}월" for m in vb_months])
-                        for vbi, vbm in enumerate(vb_months):
-                            with vb_tabs[vbi]:
-                                df_vbm = df_vb[df_vb['월']==vbm]
-                                vbm_sum = df_vbm.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
-                                st.dataframe(vbm_sum, use_container_width=True, hide_index=True)
-                                vbm_total = vbm_sum['공급가'].sum()
-                                penalty = -50000 if vb_info['안전점수'] < 90 else 0
-                                st.metric(f"{vbm}월 청구 금액", f"{max(0,vbm_total+penalty):,.0f} 원", delta=f"페널티 {penalty:,}원" if penalty else None)
-                                def make_bill(vname, month, df_month, total, pen):
-                                    out = io.BytesIO()
-                                    with pd.ExcelWriter(out, engine='xlsxwriter') as w:
-                                        wb = w.book
-                                        ws = wb.add_worksheet('청구서')
-                                        ws.set_column(0,4,18)
-                                        tf = wb.add_format({'bold':True,'font_size':16,'align':'center'})
-                                        hf = wb.add_format({'bold':True,'font_size':10,'align':'center','bg_color':'#34a853','font_color':'white','border':1})
-                                        cf = wb.add_format({'font_size':10,'align':'center','border':1})
-                                        nf = wb.add_format({'font_size':10,'align':'center','border':1,'num_format':'#,##0'})
-                                        ws.merge_range('A1:E1', f'{vname} 월별 정산 대금 청구서', tf)
-                                        ws.merge_range('A2:E2', f'청구월: 2025년 {month}월 | 발행일: {CURRENT_DATE}', wb.add_format({'font_size':10,'align':'center'}))
-                                        for ci, h in enumerate(['학교명','수거량(kg)','공급가(원)','단가(원)','비고']): ws.write(3, ci, h, hf)
-                                        for ri, (_, row) in enumerate(df_month.iterrows()):
-                                            ws.write(4+ri, 0, row['학교명'], cf); ws.write(4+ri, 1, row['수거량'], nf)
-                                            ws.write(4+ri, 2, row['공급가'], nf); ws.write(4+ri, 3, 162, nf); ws.write(4+ri, 4, '', cf)
-                                        tr = 4 + len(df_month)
-                                        ws.merge_range(tr, 0, tr, 1, '소계', hf); ws.write(tr, 2, total, nf)
-                                        ws.merge_range(tr+1, 0, tr+1, 1, '안전 페널티', hf); ws.write(tr+1, 2, pen, nf)
-                                        gf = wb.add_format({'bold':True,'font_size':14,'align':'center','border':1,'bg_color':'#34a853','font_color':'white','num_format':'#,##0'})
-                                        ws.merge_range(tr+2, 0, tr+2, 1, '최종 청구액', gf); ws.write(tr+2, 2, max(0,total+pen), gf)
-                                    return out.getvalue()
-                                st.download_button(f"📄 {vbm}월 청구서 발행", data=make_bill(sel_v, vbm, vbm_sum, vbm_total, penalty),
-                                                   file_name=f"{sel_v}_{vbm}월_청구서.xlsx", use_container_width=True, key=f"bill_{sel_v}_{vbm}")
-                    else:
-                        st.info(f"{sel_v} 담당 학교의 수거 데이터가 없습니다.")
-                else:
-                    st.info("실제 수거 데이터가 없습니다.")
+            with ac2:
+                st.caption(f"※ 외주업체 상세 관리는 해당 업체 관리자 모드(vendor_a/b/c)에서 확인하세요.")
 
         # 관리자 사이드바 - 데이터 업로드/백업
         with st.sidebar:
