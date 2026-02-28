@@ -350,26 +350,35 @@ def preprocess_real_data(df):
     if '재활용(kg)' not in df.columns: df['재활용(kg)'] = 0
     return df
 
+
+
+def load_data():
+    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
+    try:
+        df = pd.read_csv(DB_FILE)
+        return df
+    except:
+        return pd.DataFrame(columns=cols)
+
 def save_data(new_row):
     df = load_data()
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    if not df.empty:
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        df = pd.DataFrame([new_row])
     df.to_csv(DB_FILE, index=False)
 
 # --- 실제 데이터 로딩 + 전처리 ---
 df_real = preprocess_real_data(load_real_data())
 
-# --- 기존 시뮬레이션(가상) 데이터 로딩 ---
+# --- 기존 데이터 로딩 ---
 df_all = load_data()
 
-# ★ [10년 차 전문가 로직] 덮어쓰기 전 빈칸(NaN) 완벽 방어 및 뼈대 동기화
+# ★ [가상데이터 완벽 삭제 및 실제 데이터 동기화 로직] 
 if not df_real.empty:
-    # 1. 실제 데이터가 웹사이트 구조를 모방하도록 필수 컬럼 강제 주입
     df_real_sync = df_real.copy()
     
-    # 웹사이트 필터에서 날아가지 않도록 실제 데이터는 무조건 '정산완료'로 고정
     df_real_sync['상태'] = '정산완료' 
-    
-    # 에러 방지를 위한 숫자형 기본값 안전 세팅
     df_real_sync['단가(원)'] = pd.to_numeric(df_real_sync.get('단가(원)', 150), errors='coerce').fillna(150)
     df_real_sync['사업장(kg)'] = pd.to_numeric(df_real_sync.get('사업장(kg)', 0), errors='coerce').fillna(0)
     df_real_sync['재활용(kg)'] = pd.to_numeric(df_real_sync.get('재활용(kg)', 0), errors='coerce').fillna(0)
@@ -379,30 +388,23 @@ if not df_real.empty:
     if '수거업체' not in df_real_sync.columns:
         df_real_sync['수거업체'] = '하영자원(본사)'
 
+    df_real_sync['학생수'] = df_real_sync['학교명'].map(STUDENT_COUNTS).fillna(1000)
+    
     if not df_all.empty:
-        # 2. 기존 가상 데이터베이스에서 각 학교별 '학생수'를 추출해 실제 데이터에 자동 맵핑
-        student_map = df_all.drop_duplicates('학교명').set_index('학교명')['학생수'].to_dict()
-        df_real_sync['학생수'] = df_real_sync['학교명'].map(student_map).fillna(1000)
-        
-        # 3. YYYY-MM 형식 추출 및 기존 달 데이터 완벽 삭제
         df_all['임시_월별'] = pd.to_datetime(df_all['날짜'], errors='coerce').dt.strftime('%Y-%m')
         df_real_sync['임시_월별'] = pd.to_datetime(df_real_sync['날짜'], errors='coerce').dt.strftime('%Y-%m')
         
         real_months = df_real_sync['임시_월별'].dropna().unique()
         df_all = df_all[~df_all['임시_월별'].isin(real_months)].copy()
         
-        # 4. 안전하게 동기화된 데이터 병합
         df_all = pd.concat([df_all, df_real_sync], ignore_index=True)
         df_all = df_all.drop(columns=['임시_월별'], errors='ignore')
     else:
-        # 기존 가상 데이터가 아예 없을 경우의 예외 처리
-        df_real_sync['학생수'] = 1000
         df_all = df_real_sync.copy()
 
-# --- 파생 통계 컬럼 안전 계산 (결측치 차단) ---
+# --- 파생 통계 컬럼 안전 계산 ---
 if not df_all.empty:
     df_all['음식물(kg)'] = pd.to_numeric(df_all['음식물(kg)'], errors='coerce').fillna(0)
-    
     df_all['음식물비용'] = df_all['음식물(kg)'] * pd.to_numeric(df_all['단가(원)'], errors='coerce').fillna(0)
     df_all['사업장비용'] = pd.to_numeric(df_all['사업장(kg)'], errors='coerce').fillna(0) * pd.to_numeric(df_all.get('사업장단가(원)', 200), errors='coerce').fillna(0)
     df_all['재활용수익'] = pd.to_numeric(df_all['재활용(kg)'], errors='coerce').fillna(0) * pd.to_numeric(df_all.get('재활용단가(원)', 300), errors='coerce').fillna(0)
