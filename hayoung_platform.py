@@ -33,6 +33,10 @@ def init_db():
          PRIMARY KEY(vendor, month))''')
     c.execute('''CREATE TABLE IF NOT EXISTS today_schedule
         (vendor TEXT PRIMARY KEY, schools TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS customer_info
+        (vendor TEXT, name TEXT, biz_no TEXT, rep TEXT, addr TEXT,
+         biz_type TEXT, biz_item TEXT, email TEXT, cust_type TEXT,
+         PRIMARY KEY(vendor, name))''')
     conn.commit(); conn.close()
 
 def db_get(table, where=None):
@@ -91,6 +95,27 @@ def load_contracts_from_db():
 
 def save_contract_price(vendor, item, price):
     db_upsert('contract_data', {'vendor':vendor,'item':item,'price':price})
+
+def load_customers_from_db(vendor):
+    """DB에서 거래처 정보 로드 → dict 반환"""
+    rows = db_get('customer_info', f"vendor='{vendor}'")
+    if rows:
+        return {r['name']: {"사업자번호":r['biz_no'],"상호":r['name'],"대표자":r['rep'],"주소":r['addr'],"업태":r['biz_type'],"종목":r['biz_item'],"이메일":r['email'],"구분":r['cust_type']} for r in rows}
+    return None
+
+def save_customer_to_db(vendor, name, info):
+    """거래처 1건 DB 저장"""
+    db_upsert('customer_info', {'vendor':vendor,'name':name,'biz_no':info.get('사업자번호',''),'rep':info.get('대표자',''),'addr':info.get('주소',''),'biz_type':info.get('업태',''),'biz_item':info.get('종목',''),'email':info.get('이메일',''),'cust_type':info.get('구분','학교')})
+
+def delete_customer_from_db(vendor, name):
+    """거래처 1건 DB 삭제"""
+    db_delete('customer_info', f"vendor='{vendor}' AND name='{name}'")
+
+def save_all_customers_to_db(vendor, detail_dict):
+    """업체의 전체 거래처를 DB에 저장 (기존 삭제 후 전체 재삽입)"""
+    db_delete('customer_info', f"vendor='{vendor}'")
+    for name, info in detail_dict.items():
+        save_customer_to_db(vendor, name, info)
 
 # ==========================================
 # 0. 관리 대상 학교 목록 및 실제 학생 수 (검색 데이터 기반)
@@ -294,18 +319,16 @@ TREE_FACTOR = 6.6   # kg CO₂ per 소나무 1그루/년
 def load_real_data():
     """실제 수거 데이터 로딩 (무조건 최신 CSV를 읽어와서 DB와 강제 동기화)"""
     try:
-        # 1. 고집부리지 말고 무조건 최신 CSV 파일(REAL_DATA_FILE)을 읽는다!
+        # 1. 무조건 최신 CSV 파일(REAL_DATA_FILE)을 읽는다
         df = pd.read_csv(REAL_DATA_FILE)
-        
-        # 2. 읽어온 최신 데이터로 뒷단(SQLite DB)을 강제로 덮어씌운다!
+        # 2. 읽어온 최신 데이터로 SQLite DB를 강제로 덮어씌운다
         if not df.empty:
             conn = sqlite3.connect(DB_PATH)
             df.to_sql('collection_data', conn, if_exists='replace', index=False)
             conn.close()
-            
         return df
     except Exception as e:
-        # 파일이 없거나 에러가 나면 조용히 빈 표를 넘겨준다.
+        # 파일이 없거나 에러가 나면 빈 DataFrame 반환
         return pd.DataFrame()
 
 def preprocess_real_data(df):
@@ -333,12 +356,9 @@ def preprocess_real_data(df):
         df['수거시간'] = ''
     else:
         df['수거시간'] = df['수거시간'].fillna('')
-    # 사업장/재활용 컬럼 없으면 0으로
     if '사업장(kg)' not in df.columns: df['사업장(kg)'] = 0
     if '재활용(kg)' not in df.columns: df['재활용(kg)'] = 0
     return df
-
-
 
 def load_data():
     cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
@@ -362,41 +382,33 @@ df_real = preprocess_real_data(load_real_data())
 # --- 기존 데이터 로딩 ---
 df_all = load_data()
 
-# ★ [가상데이터 완벽 삭제 및 실제 데이터 동기화 로직] 
+# ★ [가상데이터 삭제 + 실제 데이터 동기화]
+# 실제 데이터가 존재하는 월의 가상데이터를 제거하고 실제 데이터로 대체
 if not df_real.empty:
     df_real_sync = df_real.copy()
-    
-    df_real_sync['상태'] = '정산완료' 
+    df_real_sync['상태'] = '정산완료'
     df_real_sync['단가(원)'] = pd.to_numeric(df_real_sync.get('단가(원)', 150), errors='coerce').fillna(150)
     df_real_sync['사업장(kg)'] = pd.to_numeric(df_real_sync.get('사업장(kg)', 0), errors='coerce').fillna(0)
     df_real_sync['재활용(kg)'] = pd.to_numeric(df_real_sync.get('재활용(kg)', 0), errors='coerce').fillna(0)
     df_real_sync['사업장단가(원)'] = 200
     df_real_sync['재활용단가(원)'] = 300
-    
     if '수거업체' not in df_real_sync.columns:
         df_real_sync['수거업체'] = '하영자원(본사)'
-
     df_real_sync['학생수'] = df_real_sync['학교명'].map(STUDENT_COUNTS).fillna(1000)
-    
     if not df_all.empty:
         df_all['임시_월별'] = pd.to_datetime(df_all['날짜'], errors='coerce').dt.strftime('%Y-%m')
         df_real_sync['임시_월별'] = pd.to_datetime(df_real_sync['날짜'], errors='coerce').dt.strftime('%Y-%m')
-        
         real_months = df_real_sync['임시_월별'].dropna().unique()
         df_all = df_all[~df_all['임시_월별'].isin(real_months)].copy()
-        
         df_all = pd.concat([df_all, df_real_sync], ignore_index=True)
         df_all = df_all.drop(columns=['임시_월별'], errors='ignore')
     else:
         df_all = df_real_sync.copy()
 
-# --- 파생 통계 컬럼 안전 계산 ---
 if not df_all.empty:
-    df_all['음식물(kg)'] = pd.to_numeric(df_all['음식물(kg)'], errors='coerce').fillna(0)
-    df_all['음식물비용'] = df_all['음식물(kg)'] * pd.to_numeric(df_all['단가(원)'], errors='coerce').fillna(0)
-    df_all['사업장비용'] = pd.to_numeric(df_all['사업장(kg)'], errors='coerce').fillna(0) * pd.to_numeric(df_all.get('사업장단가(원)', 200), errors='coerce').fillna(0)
-    df_all['재활용수익'] = pd.to_numeric(df_all['재활용(kg)'], errors='coerce').fillna(0) * pd.to_numeric(df_all.get('재활용단가(원)', 300), errors='coerce').fillna(0)
-    
+    df_all['음식물비용'] = df_all['음식물(kg)'] * df_all['단가(원)']
+    df_all['사업장비용'] = df_all['사업장(kg)'] * df_all['사업장단가(원)']
+    df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].astype(str).str[:7]
     df_all['년도'] = df_all['날짜'].astype(str).str[:4]
@@ -628,6 +640,36 @@ def create_allbaro_report(df_real, report_role, entity_name, year, item_filter=N
             ws3.write(tr, 1, total_all_kg, sum_fmt)
             ws3.write(tr, 2, total_all_sup, sum_fmt)
             ws3.write(tr, 3, len(df), sum_fmt)
+        # 시트4: 폐기물 수집운반내역 (올바로 양식)
+        ws4 = wb.add_worksheet('수집운반내역')
+        ws4.set_column(0,12,14)
+        ws4.merge_range('A1:M1', f'{entity_name} {year}년 폐기물 수집·운반 내역', tf)
+        ws4.merge_range('A2:M2', '폐기물관리법 시행규칙 [별지 제30호서식] 폐기물 수집운반실적보고 - 수집운반내역', lf)
+        ab4_h = ['No','인계일','폐기물종류','폐기물코드','성상','인계량(kg)','수집운반업체','허가번호','인계자','인수자','운반차량','최종처리업체','비고']
+        for ci, h in enumerate(ab4_h): ws4.write(3, ci, h, hf)
+        r4 = 4
+        for _, row in df.iterrows():
+            kg_val = row.get('음식물(kg)', 0)
+            if kg_val <= 0: continue
+            ws4.write(r4, 0, r4-3, cf)
+            ws4.write(r4, 1, str(row.get('날짜',''))[:10], cf)
+            ws4.write(r4, 2, '음식물류 폐기물', cf)
+            ws4.write(r4, 3, '51-01-01', cf)
+            ws4.write(r4, 4, '고상', cf)
+            ws4.write(r4, 5, kg_val, nf)
+            ws4.write(r4, 6, entity_name, cf)
+            ws4.write(r4, 7, '', cf)
+            ws4.write(r4, 8, row.get('수거기사',''), cf)
+            ws4.write(r4, 9, '', cf)
+            ws4.write(r4, 10, '', cf)
+            recycler = row.get('재활용업체', row.get('재활용방법',''))
+            ws4.write(r4, 11, str(recycler), cf)
+            ws4.write(r4, 12, '', cf)
+            r4 += 1
+        # 합계
+        ws4.write(r4, 0, '합계', hf)
+        ws4.merge_range(r4, 1, r4, 4, '', cf)
+        ws4.write(r4, 5, total_all_kg, sum_fmt)
     return output.getvalue()
 
 
@@ -917,6 +959,25 @@ else:
                             st.dataframe(tm_sum, use_container_width=True, hide_index=True)
                         else:
                             st.dataframe(df_tm[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액','상태']], use_container_width=True, hide_index=True)
+                        # ★ 계산서 발행 + 명세서 다운로드
+                        st.write("---")
+                        admin_tax = st.radio(f"{tm} 발행유형", ["전자세금계산서(부가세10%)","전자계산서(세율적용X)"], horizontal=True, key=f"adm_tax_{ti}")
+                        is_tax_a = "세금" in admin_tax
+                        total_a = df_tm['최종정산액'].sum()
+                        sup_a = int(total_a/1.1) if is_tax_a else int(total_a)
+                        vat_a = total_a - sup_a if is_tax_a else 0
+                        st.caption(f"공급가액: {sup_a:,.0f}원 | 세액: {vat_a:,.0f}원 | 합계: {total_a:,.0f}원")
+                        ac1, ac2, ac3 = st.columns(3)
+                        with ac1:
+                            if st.button(f"🧾 {'전자세금계산서' if is_tax_a else '전자계산서'} 발행", use_container_width=True, key=f"adm_tax_btn_{ti}"):
+                                st.success(f"✅ {tm} {'전자세금계산서' if is_tax_a else '전자계산서'} 발행 완료!")
+                        with ac2:
+                            school_n = sel_school_t if sel_school_t!="전체" else "전체"
+                            pdf_adm = create_monthly_invoice_pdf("하영자원(본사)", school_n, int(tm[-2:]) if '-' in tm else CURRENT_MONTH, sel_yr_t, df_tm)
+                            st.download_button(f"📄 명세서 PDF", data=pdf_adm, file_name=f"{school_n}_{tm}_명세서.pdf", mime="application/pdf", use_container_width=True, key=f"adm_inv_{ti}")
+                        with ac3:
+                            if st.button(f"📧 이메일 전송", use_container_width=True, key=f"adm_em_{ti}"):
+                                st.info("📧 SMTP 설정 후 사용 가능")
             cb1, cb2 = st.columns(2)
             with cb1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
             with cb2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
@@ -2307,43 +2368,69 @@ else:
         # ===== 탭1: 거래처별 수거현황 (품목→년도→월) =====
         with va_t1:
             st.subheader("📊 거래처별 수거 현황")
-            if not df_real.empty:
-                df_va = df_real[df_real['학교명'].isin(va_schools)]
-                if not df_va.empty:
-                    sel_va_sch = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + va_schools, key="va_school")
-                    df_vas = df_va if sel_va_sch == "전체" else df_va[df_va['학교명']==sel_va_sch]
-                    # 품목별 하위시트
-                    item_tabs = st.tabs(["📦 전체","🗑️ 음식물","🗄️ 사업장","♻️ 재활용"])
-                    for it_idx, (it_tab, it_col) in enumerate(zip(item_tabs, [None, '음식물(kg)', '사업장(kg)', '재활용(kg)'])):
-                        with it_tab:
-                            df_it = df_vas[df_vas['수거여부']] if it_col is None else df_vas[df_vas['수거여부']]
-                            # 년도 선택
-                            va_years = sorted(df_it['년도'].unique(), reverse=True)
-                            if va_years:
-                                sel_va_yr = st.selectbox("📅 년도", va_years, key=f"va_yr_{it_idx}")
-                                df_vy = df_it[df_it['년도']==sel_va_yr]
-                                va_months = sorted(df_vy['월'].unique())
-                                va_mtabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}월" for m in va_months])
-                                with va_mtabs[0]:
-                                    if sel_va_sch == "전체":
-                                        vy_sum = df_vy.groupby('학교명').agg(수거일수=('음식물(kg)','count'), 수거량=('음식물(kg)','sum'), 공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
-                                        st.dataframe(vy_sum, use_container_width=True, hide_index=True)
-                                    else:
-                                        show_cols = ['날짜','학교명','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간'] if c in df_vy.columns]
-                                        st.dataframe(df_vy[show_cols], use_container_width=True, hide_index=True)
-                                for vmi, vm in enumerate(va_months):
-                                    with va_mtabs[vmi+1]:
-                                        df_vmm = df_vy[df_vy['월']==vm]
+            cust_type_tabs = st.tabs(["🏫 학교","🏢 일반업장"])
+            va_biz_key = f"va_biz_customers_{va_vendor}"
+            if va_biz_key not in st.session_state: st.session_state[va_biz_key] = []
+            with cust_type_tabs[0]:
+                st.caption("학교 거래처 수거 현황")
+                if not df_real.empty:
+                    df_va = df_real[df_real['학교명'].isin(va_schools)]
+                    if not df_va.empty:
+                        sel_va_sch = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + va_schools, key="va_school")
+                        df_vas = df_va if sel_va_sch == "전체" else df_va[df_va['학교명']==sel_va_sch]
+                        item_tabs = st.tabs(["📦 전체","🗑️ 음식물","🗄️ 사업장","♻️ 재활용"])
+                        for it_idx, (it_tab, it_col) in enumerate(zip(item_tabs, [None,'음식물(kg)','사업장(kg)','재활용(kg)'])):
+                            with it_tab:
+                                df_it = df_vas[df_vas['수거여부']]
+                                va_years = sorted(df_it['년도'].unique(), reverse=True)
+                                if va_years:
+                                    sel_va_yr = st.selectbox("📅 년도", va_years, key=f"va_yr_{it_idx}")
+                                    df_vy = df_it[df_it['년도']==sel_va_yr]
+                                    va_months = sorted(df_vy['월'].unique())
+                                    va_mtabs = st.tabs(["📅 연간"] + [f"🗓️ {m}월" for m in va_months])
+                                    with va_mtabs[0]:
                                         if sel_va_sch == "전체":
-                                            vmm_s = df_vmm.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
-                                            st.dataframe(vmm_s, use_container_width=True, hide_index=True)
+                                            vy_sum = df_vy.groupby('학교명').agg(수거일수=('음식물(kg)','count'),수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
+                                            st.dataframe(vy_sum, use_container_width=True, hide_index=True)
                                         else:
-                                            show_cols2 = ['날짜','학교명','음식물(kg)','단가(원)','공급가'] + [c for c in ['수거기사','수거시간'] if c in df_vmm.columns]
-                                            st.dataframe(df_vmm[show_cols2], use_container_width=True, hide_index=True)
+                                            show_cols = ['날짜','학교명','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간'] if c in df_vy.columns]
+                                            st.dataframe(df_vy[show_cols], use_container_width=True, hide_index=True)
+                                    for vmi, vm in enumerate(va_months):
+                                        with va_mtabs[vmi+1]:
+                                            df_vmm = df_vy[df_vy['월']==vm]
+                                            if sel_va_sch == "전체":
+                                                vmm_s = df_vmm.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
+                                                st.dataframe(vmm_s, use_container_width=True, hide_index=True)
+                                            else:
+                                                show_cols2 = ['날짜','학교명','음식물(kg)','단가(원)','공급가'] + [c for c in ['수거기사','수거시간'] if c in df_vmm.columns]
+                                                st.dataframe(df_vmm[show_cols2], use_container_width=True, hide_index=True)
+                                            # 월말명세서 다운로드 + 이메일 전송
+                                            mc1, mc2 = st.columns(2)
+                                            with mc1:
+                                                pdf_data_m = create_monthly_invoice_pdf(va_vendor, sel_va_sch if sel_va_sch!="전체" else va_vendor, vm, sel_va_yr, df_vmm)
+                                                st.download_button(f"📄 {vm}월 명세서 PDF", data=pdf_data_m, file_name=f"{va_vendor}_{vm}월_명세서.pdf", mime="application/pdf", use_container_width=True, key=f"va_inv_dl_{it_idx}_{vm}")
+                                            with mc2:
+                                                if st.button(f"📧 {vm}월 이메일 전송", use_container_width=True, key=f"va_inv_em_{it_idx}_{vm}"):
+                                                    st.info("📧 이메일 전송 기능은 SMTP 설정 후 사용 가능합니다.")
+                    else:
+                        st.info("담당 학교의 수거 데이터가 없습니다.")
                 else:
-                    st.info("담당 학교의 수거 데이터가 없습니다.")
-            else:
-                st.info("실제 수거 데이터가 로드되지 않았습니다.")
+                    st.info("실제 수거 데이터가 로드되지 않았습니다.")
+            with cust_type_tabs[1]:
+                st.caption("일반업장 거래처 수거 현황")
+                biz_list = st.session_state[va_biz_key]
+                if biz_list:
+                    st.markdown("**등록된 일반업장:**")
+                    for bi, bn in enumerate(biz_list):
+                        st.write(f"  {bi+1}. 🏢 {bn}")
+                else:
+                    st.info("등록된 일반업장이 없습니다.")
+                st.write("---")
+                new_biz = st.text_input("신규 일반업장 추가", placeholder="예: (주)삼성전자 화성사업장", key=f"va_new_biz_{va_vendor}")
+                if st.button("➕ 업장 추가", key=f"va_add_biz_{va_vendor}"):
+                    if new_biz and new_biz not in biz_list:
+                        st.session_state[va_biz_key].append(new_biz)
+                        st.success(f"✅ {new_biz} 추가!"); st.rerun()
 
         # ===== 탭2: 정산/세금계산서 =====
         with va_t2:
@@ -2370,18 +2457,25 @@ else:
                             if st.button(f"📤 {bm}월 정산내역 본사 전송", type="primary", use_container_width=True, key=f"va_send_{bm}"):
                                 st.success(f"✅ {bm}월 정산내역({final_amt:,.0f}원)이 하영자원 본사로 전송되었습니다.")
                                 st.caption(f"전송시각: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 상태: 본사 검토 대기")
-                            # ★ 전자세금계산서 발행 버튼
+                            # ★ 전자세금계산서/전자계산서 발행 버튼
                             st.write("---")
-                            tax_type = st.radio(f"{bm}월 발행 유형", ["전자세금계산서","세금계산서"], horizontal=True, key=f"va_tax_type_{bm}")
-                            supply = int(final_amt / 1.1)
-                            vat = final_amt - supply
-                            st.caption(f"공급가액: {supply:,}원 | 부가세: {vat:,.0f}원 | 합계: {final_amt:,.0f}원")
-                            if st.button(f"🧾 {bm}월 {tax_type} 발행 (홈택스 연동)", use_container_width=True, key=f"va_tax_{bm}"):
+                            tax_type = st.radio(f"{bm}월 발행 유형", ["전자세금계산서(부가세10%)","전자계산서(세율적용X)"], horizontal=True, key=f"va_tax_type_{bm}")
+                            is_tax = "세금" in tax_type
+                            if is_tax:
+                                supply = int(final_amt / 1.1)
+                                vat = final_amt - supply
+                            else:
+                                supply = int(final_amt)
+                                vat = 0
+                            st.caption(f"공급가액: {supply:,}원 | {'부가세' if is_tax else '세액'}: {vat:,.0f}원 | 합계: {final_amt:,.0f}원")
+                            tax_label = "전자세금계산서" if is_tax else "전자계산서"
+                            if st.button(f"🧾 {bm}월 {tax_label} 발행 (홈택스 연동)", use_container_width=True, key=f"va_tax_{bm}"):
                                 with st.spinner("국세청 홈택스 API 연동 중..."):
                                     time.sleep(2)
-                                st.success(f"✅ {bm}월 {tax_type} 발행 완료!")
+                                kind_code = "01" if is_tax else "05"
+                                st.success(f"✅ {bm}월 {tax_label} 발행 완료!")
                                 st.markdown(f"""
-**{tax_type} 발행 정보**
+**{tax_label} 발행 정보** (종류코드: {kind_code})
 - 공급자: {va_vendor} ({va_data.get('사업자번호','')})
 - 공급받는자: 하영자원 (603-17-01234)
 - 작성일자: {CURRENT_DATE}
@@ -2425,22 +2519,80 @@ else:
                 st.session_state[va_data_key] = pd.DataFrame()
 
             with va_sub[0]:
-                st.markdown("**현재 등록된 거래처 리스트**")
-                cust_list = st.session_state[va_cust_key]
-                for ci, cname in enumerate(cust_list):
-                    cc1, cc2 = st.columns([4,1])
-                    with cc1: st.write(f"  {ci+1}. {cname}")
-                    with cc2:
-                        if st.button("❌", key=f"va_del_c_{va_vendor}_{ci}"):
-                            st.session_state[va_cust_key].remove(cname)
-                            st.rerun()
+                st.markdown("**📋 거래처 리스트** (홈택스 전자계산서 양식 기준)")
+                # 세션에 상세 거래처 정보 저장
+                va_detail_key = f"va_cust_detail_{va_vendor}"
+                if va_detail_key not in st.session_state:
+                    db_custs = load_customers_from_db(va_vendor)
+                    if db_custs:
+                        st.session_state[va_detail_key] = db_custs
+                    else:
+                        st.session_state[va_detail_key] = {s: {"사업자번호":"","상호":s,"대표자":"","주소":"","업태":"교육서비스","종목":"초중등교육","이메일":"","구분":"학교"} for s in st.session_state[va_cust_key]}
+                        save_all_customers_to_db(va_vendor, st.session_state[va_detail_key])
+                cust_detail = st.session_state[va_detail_key]
+                # 거래처 테이블
+                if cust_detail:
+                    rows_cd = [{"No":i+1,"구분":v.get("구분","학교"),"상호":k,"사업자번호":v.get("사업자번호",""),"대표자":v.get("대표자",""),"업태":v.get("업태",""),"종목":v.get("종목",""),"이메일":v.get("이메일","")} for i,(k,v) in enumerate(cust_detail.items())]
+                    st.dataframe(pd.DataFrame(rows_cd), use_container_width=True, hide_index=True)
                 st.write("---")
-                new_cust = st.text_input("신규 거래처명", placeholder="예: 동탄제일초등학교", key=f"va_new_cust_{va_vendor}")
-                if st.button("➕ 거래처 추가", key=f"va_add_cust_{va_vendor}"):
-                    if new_cust and new_cust not in cust_list:
-                        st.session_state[va_cust_key].append(new_cust)
-                        st.success(f"✅ {new_cust} 추가!")
-                        st.rerun()
+                st.markdown("**➕ 신규 거래처 등록 / ✏️ 기존 수정**")
+                edit_mode = st.radio("", ["신규 등록","기존 수정"], horizontal=True, key=f"va_cust_mode_{va_vendor}", label_visibility="collapsed")
+                if edit_mode == "신규 등록":
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        nc_type = st.selectbox("구분", ["학교","일반업장"], key=f"nc_type_{va_vendor}")
+                        nc_name = st.text_input("상호(거래처명)*", key=f"nc_name_{va_vendor}")
+                        nc_biz = st.text_input("사업자등록번호 ('-'없이)", placeholder="1234567890", key=f"nc_biz_{va_vendor}")
+                        nc_rep = st.text_input("대표자", key=f"nc_rep_{va_vendor}")
+                    with ec2:
+                        nc_addr = st.text_input("사업장주소", key=f"nc_addr_{va_vendor}")
+                        nc_btype = st.text_input("업태", value="교육서비스" if nc_type=="학교" else "서비스", key=f"nc_bt_{va_vendor}")
+                        nc_bitem = st.text_input("종목", value="초중등교육" if nc_type=="학교" else "", key=f"nc_bi_{va_vendor}")
+                        nc_email = st.text_input("이메일", key=f"nc_em_{va_vendor}")
+                    if st.button("➕ 거래처 등록", type="primary", use_container_width=True, key=f"nc_save_{va_vendor}"):
+                        if nc_name:
+                            new_info = {"사업자번호":nc_biz,"상호":nc_name,"대표자":nc_rep,"주소":nc_addr,"업태":nc_btype,"종목":nc_bitem,"이메일":nc_email,"구분":nc_type}
+                            st.session_state[va_detail_key][nc_name] = new_info
+                            save_customer_to_db(va_vendor, nc_name, new_info)
+                            if nc_name not in st.session_state[va_cust_key]: st.session_state[va_cust_key].append(nc_name)
+                            st.success(f"✅ {nc_name} 등록! (DB 영구 저장)"); st.rerun()
+                else:
+                    if cust_detail:
+                        sel_edit = st.selectbox("수정할 거래처", list(cust_detail.keys()), key=f"sel_edit_{va_vendor}")
+                        ed = cust_detail[sel_edit]
+                        ec1, ec2 = st.columns(2)
+                        with ec1:
+                            ed_biz = st.text_input("사업자번호", value=ed.get("사업자번호",""), key=f"ed_biz_{va_vendor}")
+                            ed_rep = st.text_input("대표자", value=ed.get("대표자",""), key=f"ed_rep_{va_vendor}")
+                            ed_type = st.selectbox("구분", ["학교","일반업장"], index=0 if ed.get("구분")=="학교" else 1, key=f"ed_type_{va_vendor}")
+                        with ec2:
+                            ed_addr = st.text_input("주소", value=ed.get("주소",""), key=f"ed_addr_{va_vendor}")
+                            ed_bt = st.text_input("업태", value=ed.get("업태",""), key=f"ed_bt_{va_vendor}")
+                            ed_bi = st.text_input("종목", value=ed.get("종목",""), key=f"ed_bi_{va_vendor}")
+                        ed_em = st.text_input("이메일", value=ed.get("이메일",""), key=f"ed_em_{va_vendor}")
+                        ec3, ec4 = st.columns(2)
+                        with ec3:
+                            if st.button("💾 수정 저장", type="primary", use_container_width=True, key=f"ed_save_{va_vendor}"):
+                                updated = {"사업자번호":ed_biz,"상호":sel_edit,"대표자":ed_rep,"주소":ed_addr,"업태":ed_bt,"종목":ed_bi,"이메일":ed_em,"구분":ed_type}
+                                st.session_state[va_detail_key][sel_edit] = updated
+                                save_customer_to_db(va_vendor, sel_edit, updated)
+                                st.success("✅ 수정! (DB 영구 반영)"); st.rerun()
+                        with ec4:
+                            if st.button("🗑️ 삭제", use_container_width=True, key=f"ed_del_{va_vendor}"):
+                                del st.session_state[va_detail_key][sel_edit]
+                                delete_customer_from_db(va_vendor, sel_edit)
+                                if sel_edit in st.session_state[va_cust_key]: st.session_state[va_cust_key].remove(sel_edit)
+                                st.success("✅ 삭제! (DB 영구 반영)"); st.rerun()
+                # 홈택스 엑셀 다운로드
+                st.write("---")
+                if st.button("📥 홈택스 전자계산서 양식 다운로드", use_container_width=True, key=f"dl_hometax_{va_vendor}"):
+                    ht_rows = []
+                    for k, v in cust_detail.items():
+                        ht_rows.append({"종류코드":"05","작성일자":CURRENT_DATE.replace('-',''),"공급자등록번호":va_data.get('사업자번호','').replace('-',''),"공급자종사업장":"","공급자상호":va_vendor,"공급자성명":va_data.get('대표',''),"공급자주소":"","공급자업태":"서비스","공급자종목":"폐기물수집운반","공급자이메일":"","공급받는자등록번호":v.get('사업자번호',''),"공급받는자종사업장":"","공급받는자상호":k,"공급받는자성명":v.get('대표자',''),"공급받는자주소":v.get('주소',''),"공급받는자업태":v.get('업태',''),"공급받는자종목":v.get('종목',''),"공급받는자이메일":v.get('이메일','')})
+                    ht_df = pd.DataFrame(ht_rows)
+                    ht_buf = io.BytesIO()
+                    ht_df.to_excel(ht_buf, index=False)
+                    st.download_button("💾 엑셀 저장", data=ht_buf.getvalue(), file_name=f"{va_vendor}_홈택스양식.xlsx", use_container_width=True, key=f"dl_ht_xl_{va_vendor}")
 
             with va_sub[1]:
                 st.markdown("**📤 자체 수거데이터 업로드**")
