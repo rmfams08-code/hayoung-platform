@@ -387,20 +387,45 @@ def save_data(new_row):
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     df.to_csv(DB_FILE, index=False)
 
-# --- 실제 데이터(2025 엑셀) 로딩 + 전처리 ---
+# --- 실제 데이터 로딩 + 전처리 ---
 df_real = preprocess_real_data(load_real_data())
 
-# --- 기존 시뮬레이션 데이터 로딩 ---
+# --- 기존 시뮬레이션(가상) 데이터 로딩 ---
 df_all = load_data()
 
+# ★ [덮어쓰기 로직] 실제 데이터가 있는 경우, 해당 월의 가상 데이터를 알아서 삭제합니다.
+if not df_real.empty and not df_all.empty:
+    # 1. 비교를 위해 YYYY-MM 형식의 월별 임시 컬럼 생성
+    df_all['임시_월별'] = pd.to_datetime(df_all['날짜'], errors='coerce').dt.strftime('%Y-%m')
+    df_real['임시_월별'] = pd.to_datetime(df_real['날짜'], errors='coerce').dt.strftime('%Y-%m')
+    
+    # 2. 실제 데이터에 존재하는 월(예: 2024-11, 2024-12) 목록 추출
+    real_months = df_real['임시_월별'].dropna().unique()
+    
+    # 3. 가상 데이터 중, 실제 데이터와 겹치는 달의 데이터는 과감히 지우기!
+    df_all = df_all[~df_all['임시_월별'].isin(real_months)].copy()
+    
+    # 4. 빈자리에 실제 데이터를 쏙 집어넣어 완벽하게 덮어쓰기
+    df_all = pd.concat([df_all, df_real], ignore_index=True)
+    
+    # 임시 컬럼 정리
+    df_all = df_all.drop(columns=['임시_월별'])
+    df_real = df_real.drop(columns=['임시_월별'])
+
+# --- 파생 통계 컬럼 자동 계산 ---
 if not df_all.empty:
+    # 덮어써진 실제 데이터의 빈칸(학생수 등)을 에러 나지 않게 기본값 처리
+    df_all['단가(원)'] = pd.to_numeric(df_all['단가(원)'], errors='coerce').fillna(150)
+    df_all['사업장(kg)'] = pd.to_numeric(df_all.get('사업장(kg)', 0), errors='coerce').fillna(0)
+    df_all['재활용(kg)'] = pd.to_numeric(df_all.get('재활용(kg)', 0), errors='coerce').fillna(0)
+    
     df_all['음식물비용'] = df_all['음식물(kg)'] * df_all['단가(원)']
-    df_all['사업장비용'] = df_all['사업장(kg)'] * df_all['사업장단가(원)']
-    df_all['재활용수익'] = df_all['재활용(kg)'] * df_all['재활용단가(원)']
+    df_all['사업장비용'] = df_all['사업장(kg)'] * pd.to_numeric(df_all.get('사업장단가(원)', 200), errors='coerce').fillna(0)
+    df_all['재활용수익'] = df_all['재활용(kg)'] * pd.to_numeric(df_all.get('재활용단가(원)', 300), errors='coerce').fillna(0)
     df_all['최종정산액'] = df_all['음식물비용'] + df_all['사업장비용'] - df_all['재활용수익']
     df_all['월별'] = df_all['날짜'].astype(str).str[:7]
-    df_all['년도'] = df_all['날짜'].astype(str).str[:4] 
-    df_all['탄소감축량(kg)'] = df_all['음식물(kg)'] * CO2_FACTOR  # ★ 환경부 기준 적용
+    df_all['년도'] = df_all['날짜'].astype(str).str[:4]
+    df_all['탄소감축량(kg)'] = df_all['음식물(kg)'] * CO2_FACTOR
 else:
     cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태", "음식물비용", "사업장비용", "재활용수익", "최종정산액", "월별", "년도", "탄소감축량(kg)"]
     df_all = pd.DataFrame(columns=cols)
