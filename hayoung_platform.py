@@ -467,11 +467,19 @@ def create_allbaro_report(df_real, report_role, entity_name, year, item_filter=N
         ws2.merge_range(row_idx, 1, row_idx, 2, '', cf)
         ws2.write(row_idx, 3, total_all, wb.add_format({'bold':True,'font_size':11,'align':'center','border':1,'num_format':'#,##0','bg_color':'#e3f2fd'}))
         ws2.write(row_idx, 5, total_all, wb.add_format({'bold':True,'font_size':11,'align':'center','border':1,'num_format':'#,##0','bg_color':'#e3f2fd'}))
-        # 시트3: 상세 데이터
-        show_cols = ['날짜','학교명','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간','재활용업체'] if c in df.columns]
-        df[show_cols].to_excel(writer, index=False, sheet_name='상세데이터', startrow=1)
-        ws3 = writer.sheets['상세데이터']
-        ws3.merge_range('A1:H1', f'{entity_name} {year}년 상세 수거 데이터', tf)
+        # 시트3~: 거래처(학교)별 시트
+        show_cols = ['날짜','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간'] if c in df.columns]
+        schools_in = sorted(df['학교명'].unique()) if '학교명' in df.columns else []
+        for sch in schools_in:
+            df_sch = df[df['학교명']==sch]
+            safe_name = str(sch)[:31]  # 시트명 31자 제한
+            valid_cols = [c for c in show_cols if c in df_sch.columns]
+            df_sch[valid_cols].to_excel(writer, index=False, sheet_name=safe_name, startrow=2)
+            ws_s = writer.sheets[safe_name]
+            ws_s.merge_range(0, 0, 0, len(valid_cols)-1, f'{sch} - {year}년 수거 실적', tf)
+            total_kg = df_sch['음식물(kg)'].sum() if '음식물(kg)' in df_sch.columns else 0
+            total_sup = df_sch['공급가'].sum() if '공급가' in df_sch.columns else 0
+            ws_s.write(1, 0, f'수거량합계: {total_kg:,.0f}kg | 공급가합계: {total_sup:,.0f}원 | 건수: {len(df_sch)}건', lf)
     return output.getvalue()
 
 
