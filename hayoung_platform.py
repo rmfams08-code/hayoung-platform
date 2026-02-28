@@ -631,6 +631,95 @@ def create_allbaro_report(df_real, report_role, entity_name, year, item_filter=N
     return output.getvalue()
 
 
+def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
+    """월말거래명세서 PDF 생성 (한글 깨짐 방지 - WenQuanYi Zen Hei)"""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    # 한글 폰트 등록 (WQY Zen Hei - 한중일 지원 TTF)
+    KR_FONT = 'KoreanFont'
+    try:
+        pdfmetrics.registerFont(TTFont(KR_FONT, '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc', subfontIndex=0))
+    except:
+        pass
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+    # 헤더
+    c.setFont(KR_FONT, 18)
+    c.drawCentredString(w/2, h-35*mm, '거 래 명 세 서')
+    c.setFont(KR_FONT, 10)
+    c.drawCentredString(w/2, h-43*mm, f'{year}년 {month}월 월말 거래명세서')
+    # 구분선
+    c.setStrokeColor(colors.Color(0.1,0.4,0.7))
+    c.setLineWidth(1.5)
+    c.line(15*mm, h-47*mm, w-15*mm, h-47*mm)
+    # 공급자/공급받는자
+    c.setFont(KR_FONT, 10)
+    y = h-55*mm
+    c.drawString(20*mm, y, '공급자 (수집운반업체)')
+    c.drawString(110*mm, y, '공급받는자 (배출자)')
+    c.setFont(KR_FONT, 9)
+    c.drawString(20*mm, y-6*mm, f'업 체 명 : {vendor_name}')
+    c.drawString(110*mm, y-6*mm, f'학 교 명 : {school_name}')
+    c.drawString(20*mm, y-12*mm, f'발 행 일 : {CURRENT_DATE}')
+    c.drawString(110*mm, y-12*mm, f'기    간 : {year}년 {month}월 1일 ~ 말일')
+    # 테이블 헤더
+    table_y = y - 22*mm
+    c.setFillColor(colors.Color(0.1,0.4,0.7))
+    c.rect(15*mm, table_y, w-30*mm, 7*mm, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont(KR_FONT, 8)
+    cols = [18, 38, 70, 92, 115, 145]
+    headers = ['No','수거일','단위(L)','단가(원)','공급가(원)','재활용방법']
+    for ci, hd in enumerate(headers):
+        c.drawString(cols[ci]*mm, table_y+2*mm, hd)
+    # 데이터 행
+    c.setFillColor(colors.black)
+    c.setFont(KR_FONT, 8)
+    row_y = table_y - 6*mm
+    total_qty = 0; total_amt = 0
+    for ri, (_, row) in enumerate(df_month.iterrows()):
+        if row_y < 35*mm:
+            c.showPage(); row_y = h - 25*mm
+            c.setFont(KR_FONT, 8)
+        qty = row.get('단위(L)', row.get('음식물(kg)', 0))
+        price = row.get('단가', row.get('단가(원)', 170))
+        supply = row.get('공급가', qty * price if qty else 0)
+        date_str = str(row.get('수거일', row.get('날짜', '')))
+        if ri % 2 == 0:
+            c.setFillColor(colors.Color(0.95,0.97,1.0))
+            c.rect(15*mm, row_y-1.5*mm, w-30*mm, 5.5*mm, fill=1, stroke=0)
+        c.setFillColor(colors.black)
+        c.drawString(cols[0]*mm, row_y+1*mm, str(ri+1))
+        c.drawString(cols[1]*mm, row_y+1*mm, date_str[:15])
+        c.drawString(cols[2]*mm, row_y+1*mm, f'{qty:,.0f}' if qty else '-')
+        c.drawString(cols[3]*mm, row_y+1*mm, f'{price:,.0f}')
+        c.drawString(cols[4]*mm, row_y+1*mm, f'{supply:,.0f}' if supply else '-')
+        c.drawString(cols[5]*mm, row_y+1*mm, str(row.get('재활용방법', ''))[:10])
+        if qty: total_qty += qty
+        if supply: total_amt += supply
+        row_y -= 5.5*mm
+    # 합계
+    row_y -= 2*mm
+    c.setFillColor(colors.Color(0.1,0.4,0.7))
+    c.rect(15*mm, row_y-1.5*mm, w-30*mm, 7*mm, fill=1, stroke=0)
+    c.setFillColor(colors.white); c.setFont(KR_FONT, 9)
+    c.drawString(cols[0]*mm, row_y+1*mm, '합  계')
+    c.drawString(cols[2]*mm, row_y+1*mm, f'{total_qty:,.0f}')
+    c.drawString(cols[4]*mm, row_y+1*mm, f'{total_amt:,.0f}')
+    # 하단 서명
+    c.setFillColor(colors.black); c.setFont(KR_FONT, 8)
+    c.drawString(20*mm, 25*mm, f'위 금액을 거래명세서로 발행합니다.')
+    c.drawString(20*mm, 20*mm, f'{vendor_name} 대표')
+    c.drawRightString(w-20*mm, 20*mm, f'하영자원 폐기물데이터플랫폼 자동생성 ({CURRENT_DATE})')
+    c.save()
+    return buf.getvalue()
+
+
 # ==========================================
 # ★ 화면 라우팅: 로그인 전→랜딩 / 로그인 후→역할별 대시보드
 # ==========================================
@@ -940,27 +1029,50 @@ else:
 
             elif sched_mode == "월별 일정 관리":
                 st.markdown("#### 🗓️ 월별 수거일정 관리")
-                sel_sv = st.selectbox("업체 선택", all_vendor_names, key="sched_vendor_monthly")
-                v_sch_list = get_vendor_schools(sel_sv)
-                sel_sm = st.selectbox("월 선택", list(range(1,13)), format_func=lambda x: f"{x}월", key="sched_month_sel")
-                st.markdown(f"**{sel_sv} - {sel_sm}월 수거 요일 설정**")
-                weekdays = ['월','화','수','목','금']
-                # 기존 저장 일정 불러오기
-                sk_existing = st.session_state.get(f"monthly_sched_{sel_sv}_{sel_sm}", {"요일":['월','수','금'], "학교":v_sch_list, "품목":['음식물','사업장','재활용']})
-                sched_days = st.multiselect("수거 요일", weekdays, default=sk_existing.get('요일',['월','수','금']), key=f"sched_days_{sel_sv}_{sel_sm}")
-                sched_schools = st.multiselect("수거 대상 학교", v_sch_list, default=[s for s in sk_existing.get('학교',v_sch_list) if s in v_sch_list], key=f"sched_schools_{sel_sv}_{sel_sm}")
-                sched_items = st.multiselect("수거 품목", ['음식물','사업장','재활용'], default=sk_existing.get('품목',['음식물','사업장','재활용']), key=f"sched_items_{sel_sv}_{sel_sm}")
-                if st.button("💾 월별 일정 저장", type="primary", use_container_width=True, key="save_monthly"):
-                    st.session_state[f"monthly_sched_{sel_sv}_{sel_sm}"] = {"요일": sched_days, "학교": sched_schools, "품목": sched_items}
-                    st.success(f"✅ {sel_sv} {sel_sm}월 일정 저장 완료!")
-                # 저장된 일정 표시
-                st.write("---")
-                st.markdown(f"**📋 {sel_sv} 등록된 월별 일정**")
-                for m in range(1, 13):
-                    sk = f"monthly_sched_{sel_sv}_{m}"
-                    if sk in st.session_state:
-                        sd = st.session_state[sk]
-                        st.caption(f"📅 {m}월: {'/'.join(sd.get('요일',[]))} | 품목: {'/'.join(sd.get('품목',[]))} | 학교: {', '.join(sd.get('학교',[])[:3])}{'...' if len(sd.get('학교',[]))>3 else ''}")
+                sched_sub = st.tabs(["📅 정기 일정 등록","📋 수거예정일 등록","✏️ 기존 일정 수정"])
+                with sched_sub[0]:
+                    sel_sv = st.selectbox("업체 선택", all_vendor_names, key="sched_vendor_monthly")
+                    v_sch_list = get_vendor_schools(sel_sv)
+                    sel_sm = st.selectbox("월 선택", list(range(1,13)), format_func=lambda x: f"{x}월", key="sched_month_sel")
+                    weekdays = ['월','화','수','목','금']
+                    sk_existing = st.session_state.get(f"monthly_sched_{sel_sv}_{sel_sm}", {"요일":['월','수','금'], "학교":v_sch_list, "품목":['음식물','사업장','재활용']})
+                    sched_days = st.multiselect("수거 요일", weekdays, default=sk_existing.get('요일',['월','수','금']), key=f"sched_days_{sel_sv}_{sel_sm}")
+                    sched_schools = st.multiselect("수거 대상 학교", v_sch_list, default=[s for s in sk_existing.get('학교',v_sch_list) if s in v_sch_list], key=f"sched_schools_{sel_sv}_{sel_sm}")
+                    sched_items = st.multiselect("수거 품목", ['음식물','사업장','재활용'], default=sk_existing.get('품목',['음식물','사업장','재활용']), key=f"sched_items_{sel_sv}_{sel_sm}")
+                    if st.button("💾 월별 일정 저장", type="primary", use_container_width=True, key="save_monthly"):
+                        st.session_state[f"monthly_sched_{sel_sv}_{sel_sm}"] = {"요일": sched_days, "학교": sched_schools, "품목": sched_items}
+                        st.success(f"✅ {sel_sv} {sel_sm}월 일정 저장 완료!")
+                with sched_sub[1]:
+                    st.markdown("**📋 수거예정일 개별 등록**")
+                    sp_vendor = st.selectbox("업체 선택", all_vendor_names, key="sp_vendor")
+                    sp_schools = get_vendor_schools(sp_vendor)
+                    sp_school = st.selectbox("거래처(학교)", sp_schools if sp_schools else ["등록된 거래처 없음"], key="sp_school")
+                    sp_item = st.selectbox("수거 품목", ['음식물','사업장','재활용'], key="sp_item")
+                    sp_date = st.date_input("수거 예정일", key="sp_date")
+                    sp_memo = st.text_input("메모 (선택)", key="sp_memo")
+                    if st.button("📅 수거예정일 등록", type="primary", use_container_width=True, key="sp_save"):
+                        pk = 'planned_schedules'
+                        if pk not in st.session_state: st.session_state[pk] = []
+                        st.session_state[pk].append({"업체":sp_vendor,"학교":sp_school,"품목":sp_item,"날짜":str(sp_date),"메모":sp_memo})
+                        st.success(f"✅ {sp_vendor} → {sp_school} ({sp_item}) {sp_date} 등록!")
+                    if st.session_state.get('planned_schedules'):
+                        st.write("---")
+                        st.markdown("**📋 등록된 수거예정일**")
+                        st.dataframe(pd.DataFrame(st.session_state['planned_schedules']), use_container_width=True, hide_index=True)
+                with sched_sub[2]:
+                    st.markdown("**✏️ 기존 등록 일정 확인/수정**")
+                    sel_edit_v = st.selectbox("업체", all_vendor_names, key="edit_sched_v")
+                    for m in range(1, 13):
+                        sk = f"monthly_sched_{sel_edit_v}_{m}"
+                        if sk in st.session_state:
+                            sd = st.session_state[sk]
+                            with st.expander(f"📅 {m}월: {'/'.join(sd.get('요일',[]))} | {'/'.join(sd.get('품목',[]))}", expanded=(m==CURRENT_MONTH)):
+                                st.write(f"수거요일: {', '.join(sd.get('요일',[]))}")
+                                st.write(f"수거품목: {', '.join(sd.get('품목',[]))}")
+                                st.write(f"대상학교: {', '.join(sd.get('학교',[]))}")
+                                if st.button(f"🗑️ {m}월 일정 삭제", key=f"del_sched_{sel_edit_v}_{m}"):
+                                    del st.session_state[sk]
+                                    st.success(f"✅ {m}월 일정 삭제!"); st.rerun()
 
             elif sched_mode == "신규 거래처 추가":
                 st.markdown("#### ➕ 신규 거래처(학교) 추가")
@@ -1397,6 +1509,53 @@ else:
                     st.caption(f"• {vn}: {sch_count}개교")
                 own_count = len(st.session_state.get('schedule_하영자원(본사)', []))
                 st.caption(f"• 하영자원(본사): {own_count}개교")
+            with st.expander("📄 월말거래명세서 발송"):
+                st.caption("PDF 파일을 업로드하면 자동 분석 후 거래명세서를 생성합니다.")
+                inv_file = st.file_uploader("잔반처리량 PDF/CSV/엑셀", type=['pdf','csv','xlsx'], key="admin_inv_upload")
+                if inv_file:
+                    try:
+                        if inv_file.name.endswith('.csv'):
+                            df_inv = pd.read_csv(inv_file)
+                        elif inv_file.name.endswith(('.xlsx','.xls')):
+                            df_inv = pd.read_excel(inv_file)
+                        else:
+                            # PDF → 텍스트 파싱
+                            import re as re_mod
+                            content = inv_file.read().decode('utf-8', errors='ignore')
+                            # PDF 원본 텍스트에서 데이터 추출 시도
+                            inv_file.seek(0)
+                            lines_raw = content.split('\n')
+                            rows_parsed = []
+                            for line in lines_raw:
+                                m = re_mod.search(r'(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*\S+\s+(\d+)\s+[\d.]+\s+([\d,]+)', line)
+                                if m:
+                                    rows_parsed.append({'수거일':m.group(1),'단위(L)':int(m.group(2)),'단가':170,'공급가':int(m.group(3).replace(',','')),'재활용방법':'퇴비화및비료생산'})
+                            if rows_parsed:
+                                df_inv = pd.DataFrame(rows_parsed)
+                            else:
+                                df_inv = pd.DataFrame()
+                                st.warning("PDF에서 데이터를 자동 추출하지 못했습니다. CSV/엑셀로 업로드해 주세요.")
+                        if not df_inv.empty:
+                            st.success(f"✅ {len(df_inv)}건 분석 완료")
+                            st.session_state['admin_inv_data'] = df_inv
+                            st.dataframe(df_inv.head(10), use_container_width=True, hide_index=True)
+                            # 요약
+                            qty_col = [c for c in df_inv.columns if '단위' in c or 'L' in c or 'kg' in c or '음식물' in c]
+                            sup_col = [c for c in df_inv.columns if '공급가' in c]
+                            if qty_col: st.metric("총 수거량", f"{df_inv[qty_col[0]].sum():,.0f}")
+                            if sup_col: st.metric("총 공급가", f"{df_inv[sup_col[0]].sum():,.0f}원")
+                    except Exception as e:
+                        st.error(f"파일 분석 실패: {e}")
+                # 거래명세서 PDF 생성
+                if 'admin_inv_data' in st.session_state and not st.session_state['admin_inv_data'].empty:
+                    st.write("---")
+                    inv_vendor = st.selectbox("발송 업체", ["하영자원(본사)"] + list(VENDOR_DATA.keys()), key="inv_vendor")
+                    inv_school = st.text_input("거래처(학교)명", value="평촌초등학교", key="inv_school")
+                    inv_month = st.number_input("월", value=11, min_value=1, max_value=12, key="inv_month")
+                    if st.button("📄 거래명세서 PDF 생성", type="primary", use_container_width=True, key="gen_invoice"):
+                        pdf_data = create_monthly_invoice_pdf(inv_vendor, inv_school, inv_month, "2025", st.session_state['admin_inv_data'])
+                        st.download_button("📥 거래명세서 다운로드", data=pdf_data, file_name=f"{inv_school}_{inv_month}월_거래명세서.pdf", mime="application/pdf", use_container_width=True, key="dl_invoice")
+                        st.success("✅ 거래명세서 PDF 생성 완료!")
 
     # ============ [모드2] 학교 담당자 ============
     elif role == "school":
@@ -2322,14 +2481,22 @@ else:
 
         # ===== 탭4: 수거일정 =====
         with va_t4:
-            st.subheader("📅 수거일정 확인")
-            va_sched_tabs = st.tabs(["📅 오늘 일정","🗓️ 월별 일정"])
+            st.subheader("📅 수거일정 관리")
+            va_sched_tabs = st.tabs(["📅 오늘 일정","🗓️ 월별 일정","📋 수거예정일 등록"])
             with va_sched_tabs[0]:
                 today_sch = st.session_state.get(f'schedule_{va_vendor}', va_schools)
                 st.markdown(f"**오늘 수거 학교 ({len(today_sch)}곳):**")
                 for si, sch in enumerate(today_sch):
                     st.markdown(f"  {si+1}. 🏫 {sch}")
                 st.markdown(f"**담당 기사:** {', '.join(va_drivers)}")
+                # 오늘 일정 수정
+                st.write("---")
+                va_cust_key = f"va_customers_{va_vendor}"
+                all_va_sch = st.session_state.get(va_cust_key, va_schools)
+                new_today = st.multiselect("오늘 수거 학교 수정", all_va_sch, default=today_sch, key=f"va_today_edit_{va_vendor}")
+                if st.button("💾 오늘 일정 저장", key=f"va_save_today_{va_vendor}"):
+                    st.session_state[f'schedule_{va_vendor}'] = new_today
+                    st.success("✅ 오늘 일정 저장!"); st.rerun()
             with va_sched_tabs[1]:
                 has_m = False
                 for m in range(1, 13):
@@ -2342,7 +2509,30 @@ else:
                             st.write(f"**수거 품목:** {', '.join(sd.get('품목',[]))}")
                             st.write(f"**대상 학교:** {', '.join(sd.get('학교',[]))}")
                 if not has_m:
-                    st.info("본사에서 등록한 월별 일정이 없습니다.")
+                    st.info("등록된 월별 일정이 없습니다.")
+                # 월별 일정 직접 등록
+                st.write("---")
+                st.markdown("**🗓️ 월별 일정 등록/수정**")
+                va_sm = st.selectbox("월", list(range(1,13)), format_func=lambda x:f"{x}월", key=f"va_sched_m_{va_vendor}")
+                va_sd = st.multiselect("수거 요일", ['월','화','수','목','금'], default=['월','수','금'], key=f"va_sd_{va_vendor}_{va_sm}")
+                va_si = st.multiselect("품목", ['음식물','사업장','재활용'], default=['음식물'], key=f"va_si_{va_vendor}_{va_sm}")
+                va_ss = st.multiselect("대상 학교", all_va_sch, default=all_va_sch, key=f"va_ss_{va_vendor}_{va_sm}")
+                if st.button("💾 월별 일정 저장", key=f"va_save_m_{va_vendor}"):
+                    st.session_state[f"monthly_sched_{va_vendor}_{va_sm}"] = {"요일":va_sd,"학교":va_ss,"품목":va_si}
+                    st.success(f"✅ {va_sm}월 일정 저장!"); st.rerun()
+            with va_sched_tabs[2]:
+                st.markdown("**📋 수거예정일 개별 등록**")
+                va_sp_sch = st.selectbox("거래처", all_va_sch if all_va_sch else ["거래처 없음"], key=f"va_sp_sch_{va_vendor}")
+                va_sp_item = st.selectbox("품목", ['음식물','사업장','재활용'], key=f"va_sp_item_{va_vendor}")
+                va_sp_date = st.date_input("수거 예정일", key=f"va_sp_date_{va_vendor}")
+                if st.button("📅 등록", type="primary", key=f"va_sp_save_{va_vendor}"):
+                    pk = f'va_planned_{va_vendor}'
+                    if pk not in st.session_state: st.session_state[pk] = []
+                    st.session_state[pk].append({"학교":va_sp_sch,"품목":va_sp_item,"날짜":str(va_sp_date)})
+                    st.success(f"✅ {va_sp_sch} ({va_sp_item}) {va_sp_date} 등록!")
+                pk = f'va_planned_{va_vendor}'
+                if st.session_state.get(pk):
+                    st.dataframe(pd.DataFrame(st.session_state[pk]), use_container_width=True, hide_index=True)
 
         # ===== 탭5: 기사 관리 =====
         with va_t5:
@@ -2352,3 +2542,46 @@ else:
                     di = DRIVER_ACCOUNTS[did]
                     st.markdown(f"**{di['name']}** (ID: {did}) | 담당: {', '.join(di.get('schools',[]))}")
             st.markdown(f"**차량:** {', '.join(va_data.get('차량',[]))}")
+
+        # ===== 외주업체 사이드바: 거래명세서 발송 =====
+        with st.sidebar:
+            st.write("---")
+            with st.expander("📄 월말거래명세서 발송"):
+                st.caption("잔반처리량 파일을 업로드하면 거래명세서 PDF를 생성합니다.")
+                va_inv_file = st.file_uploader("잔반처리량 PDF/CSV/엑셀", type=['pdf','csv','xlsx'], key=f"va_inv_{va_vendor}")
+                if va_inv_file:
+                    try:
+                        if va_inv_file.name.endswith('.csv'):
+                            va_df_inv = pd.read_csv(va_inv_file)
+                        elif va_inv_file.name.endswith(('.xlsx','.xls')):
+                            va_df_inv = pd.read_excel(va_inv_file)
+                        else:
+                            import re as re_mod
+                            content = va_inv_file.read().decode('utf-8', errors='ignore')
+                            va_inv_file.seek(0)
+                            rows_p = []
+                            for line in content.split('\n'):
+                                m = re_mod.search(r'(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*\S+\s+(\d+)\s+[\d.]+\s+([\d,]+)', line)
+                                if m:
+                                    rows_p.append({'수거일':m.group(1),'단위(L)':int(m.group(2)),'단가':170,'공급가':int(m.group(3).replace(',','')),'재활용방법':'퇴비화및비료생산'})
+                            va_df_inv = pd.DataFrame(rows_p) if rows_p else pd.DataFrame()
+                            if va_df_inv.empty:
+                                st.warning("PDF 자동 추출 실패. CSV/엑셀로 업로드해 주세요.")
+                        if not va_df_inv.empty:
+                            st.success(f"✅ {len(va_df_inv)}건 분석")
+                            st.session_state[f'va_inv_data_{va_vendor}'] = va_df_inv
+                            qty_col = [c for c in va_df_inv.columns if '단위' in c or 'L' in c or 'kg' in c]
+                            sup_col = [c for c in va_df_inv.columns if '공급가' in c]
+                            if qty_col: st.metric("수거량", f"{va_df_inv[qty_col[0]].sum():,.0f}")
+                            if sup_col: st.metric("공급가", f"{va_df_inv[sup_col[0]].sum():,.0f}원")
+                    except Exception as e:
+                        st.error(f"분석 실패: {e}")
+                va_inv_key = f'va_inv_data_{va_vendor}'
+                if va_inv_key in st.session_state and not st.session_state[va_inv_key].empty:
+                    st.write("---")
+                    va_inv_sch = st.text_input("거래처명", value=va_schools[0] if va_schools else "", key=f"va_inv_sch_{va_vendor}")
+                    va_inv_m = st.number_input("월", value=11, min_value=1, max_value=12, key=f"va_inv_m_{va_vendor}")
+                    if st.button("📄 PDF 생성", type="primary", use_container_width=True, key=f"va_gen_inv_{va_vendor}"):
+                        pdf_data = create_monthly_invoice_pdf(va_vendor, va_inv_sch, va_inv_m, "2025", st.session_state[va_inv_key])
+                        st.download_button("📥 다운로드", data=pdf_data, file_name=f"{va_inv_sch}_{va_inv_m}월_거래명세서.pdf", mime="application/pdf", use_container_width=True, key=f"va_dl_inv_{va_vendor}")
+                        st.success("✅ PDF 생성 완료!")
