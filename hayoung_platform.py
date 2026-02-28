@@ -9,7 +9,88 @@ import random
 import os
 import json
 import hashlib
+import sqlite3
 from datetime import datetime, timedelta
+
+# ==========================================
+# ★ SQLite DB (시세/계약/일정 영구 저장)
+# ==========================================
+DB_PATH = "hayoung_platform.db"
+
+def init_db():
+    """SQLite DB 초기화 (테이블 없으면 생성)"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS price_data
+        (category TEXT, item TEXT, price INTEGER, unit TEXT, trend TEXT, sub_cat TEXT,
+         PRIMARY KEY(category, item))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS contract_data
+        (vendor TEXT, item TEXT, price INTEGER, PRIMARY KEY(vendor, item))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS contract_info
+        (vendor TEXT PRIMARY KEY, rep TEXT, biz_no TEXT, start_date TEXT, end_date TEXT, status TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS schedule_data
+        (vendor TEXT, month INTEGER, weekdays TEXT, schools TEXT, items TEXT,
+         PRIMARY KEY(vendor, month))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS today_schedule
+        (vendor TEXT PRIMARY KEY, schools TEXT)''')
+    conn.commit(); conn.close()
+
+def db_get(table, where=None):
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row
+    q = f"SELECT * FROM {table}" + (f" WHERE {where}" if where else "")
+    rows = conn.execute(q).fetchall(); conn.close()
+    return [dict(r) for r in rows]
+
+def db_upsert(table, data):
+    conn = sqlite3.connect(DB_PATH)
+    cols = ','.join(data.keys()); placeholders = ','.join(['?']*len(data))
+    conn.execute(f"REPLACE INTO {table} ({cols}) VALUES ({placeholders})", list(data.values()))
+    conn.commit(); conn.close()
+
+def db_delete(table, where):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(f"DELETE FROM {table} WHERE {where}")
+    conn.commit(); conn.close()
+
+init_db()
+
+def load_price_from_db():
+    rows = db_get('price_data')
+    if rows:
+        result = {"폐기물":{},"재활용품":{}}
+        for r in rows:
+            result[r['category']][r['item']] = {"단가":r['price'],"단위":r['unit'],"변동":r['trend'],"카테고리":r['sub_cat']}
+        return result
+    defaults = {
+        "폐기물":{"음식물폐기물(혼합)":{"단가":162,"단위":"원/kg","변동":"▲5","카테고리":"음식물"},"음식물폐기물(분리)":{"단가":140,"단위":"원/kg","변동":"—","카테고리":"음식물"},"사업장일반폐기물":{"단가":200,"단위":"원/kg","변동":"▼10","카테고리":"사업장"},"사업장지정폐기물":{"단가":350,"단위":"원/kg","변동":"▲20","카테고리":"사업장"},"건설폐기물(혼합)":{"단가":45,"단위":"원/kg","변동":"—","카테고리":"건설"}},
+        "재활용품":{"폐지(신문지)":{"단가":120,"단위":"원/kg","변동":"▼15","카테고리":"종이류"},"폐지(골판지)":{"단가":80,"단위":"원/kg","변동":"▼10","카테고리":"종이류"},"폐지(서적류)":{"단가":90,"단위":"원/kg","변동":"—","카테고리":"종이류"},"PET병(투명)":{"단가":450,"단위":"원/kg","변동":"▲30","카테고리":"플라스틱"},"PET병(유색)":{"단가":200,"단위":"원/kg","변동":"▲10","카테고리":"플라스틱"},"PP(폴리프로필렌)":{"단가":350,"단위":"원/kg","변동":"▲20","카테고리":"플라스틱"},"PE(폴리에틸렌)":{"단가":300,"단위":"원/kg","변동":"▲15","카테고리":"플라스틱"},"PS(폴리스티렌)":{"단가":150,"단위":"원/kg","변동":"▼5","카테고리":"플라스틱"},"혼합플라스틱":{"단가":100,"단위":"원/kg","변동":"—","카테고리":"플라스틱"},"스티로폼(EPS)":{"단가":500,"단위":"원/kg","변동":"▲50","카테고리":"플라스틱"},"알루미늄캔":{"단가":1200,"단위":"원/kg","변동":"▲80","카테고리":"금속류"},"철캔(스틸)":{"단가":350,"단위":"원/kg","변동":"▲20","카테고리":"금속류"},"비철금속(구리)":{"단가":8500,"단위":"원/kg","변동":"▲200","카테고리":"금속류"},"고철(잡철)":{"단가":280,"단위":"원/kg","변동":"▼15","카테고리":"금속류"},"투명유리병":{"단가":60,"단위":"원/kg","변동":"—","카테고리":"유리류"},"갈색유리병":{"단가":40,"단위":"원/kg","변동":"—","카테고리":"유리류"},"혼합유리":{"단가":20,"단위":"원/kg","변동":"▼5","카테고리":"유리류"},"의류(면직물)":{"단가":200,"단위":"원/kg","변동":"▲10","카테고리":"기타"},"폐형광등":{"단가":0,"단위":"원/개","변동":"—","카테고리":"기타"},"폐건전지":{"단가":0,"단위":"원/kg","변동":"—","카테고리":"기타"},"폐식용유":{"단가":300,"단위":"원/L","변동":"▲30","카테고리":"기타"},"폐가전제품":{"단가":0,"단위":"원/대","변동":"—","카테고리":"기타"},"폐목재":{"단가":30,"단위":"원/kg","변동":"—","카테고리":"기타"}}
+    }
+    for cat, items in defaults.items():
+        for item, v in items.items():
+            db_upsert('price_data', {'category':cat,'item':item,'price':v['단가'],'unit':v['단위'],'trend':v['변동'],'sub_cat':v['카테고리']})
+    return defaults
+
+def save_price_to_db(cat, item, price, unit="원/kg", trend="수정", sub_cat="기타"):
+    db_upsert('price_data', {'category':cat,'item':item,'price':price,'unit':unit,'trend':trend,'sub_cat':sub_cat})
+
+def load_contracts_from_db():
+    rows = db_get('contract_info')
+    if rows:
+        result = {}
+        for r in rows:
+            items = db_get('contract_data', f"vendor='{r['vendor']}'")
+            result[r['vendor']] = {"대표":r['rep'],"사업자번호":r['biz_no'],"계약시작":r['start_date'],"계약만료":r['end_date'],"상태":r['status'],"품목단가":{i['item']:i['price'] for i in items}}
+        return result
+    result = {}
+    for vn, vd in VENDOR_DATA.items():
+        result[vn] = {"대표":vd['대표'],"사업자번호":vd['사업자번호'],"계약시작":"2025-04-01","계약만료":vd['계약만료'],"상태":"정상" if vd['안전점수']>=90 else "주의","품목단가":{"음식물폐기물":162,"사업장일반폐기물":200,"재활용(혼합)":300}}
+        db_upsert('contract_info', {'vendor':vn,'rep':vd['대표'],'biz_no':vd['사업자번호'],'start_date':'2025-04-01','end_date':vd['계약만료'],'status':result[vn]['상태']})
+        for item, price in result[vn]['품목단가'].items():
+            db_upsert('contract_data', {'vendor':vn,'item':item,'price':price})
+    return result
+
+def save_contract_price(vendor, item, price):
+    db_upsert('contract_data', {'vendor':vendor,'item':item,'price':price})
 
 # ==========================================
 # 0. 관리 대상 학교 목록 및 실제 학생 수 (검색 데이터 기반)
@@ -73,6 +154,8 @@ DRIVER_ACCOUNTS = {
     "driver07": {"pw":"dr2026!","role":"driver","name":"오세진 기사","vendor":"B자원","schools":["구현고등학교","비봉고등학교"]},
     "driver08": {"pw":"dr2026!","role":"driver","name":"윤재혁 기사","vendor":"C로지스","schools":["안산고등학교","안산국제비지니스고등학교"]},
     "driver09": {"pw":"dr2026!","role":"driver","name":"송태윤 기사","vendor":"C로지스","schools":["송호고등학교"]},
+    "driver10": {"pw":"dr2026!","role":"driver","name":"정민수 기사","vendor":"더존환경","schools":[]},
+    "driver11": {"pw":"dr2026!","role":"driver","name":"한도현 기사","vendor":"더존환경","schools":[]},
 }
 
 # ==========================================
@@ -100,6 +183,13 @@ VENDOR_DATA = {
         "schools":["안산고등학교","안산국제비지니스고등학교","송호고등학교"],
         "안전점수":92,"상태":"🟢 운행중","계약만료":"2027-01-15",
     },
+    "더존환경": {
+        "대표":"정더존","사업자번호":"456-78-90123","연락처":"031-567-8901",
+        "차량":["경기94바 9012"],
+        "drivers":["driver10","driver11"],
+        "schools":[],
+        "안전점수":90,"상태":"🟢 운행중","계약만료":"2027-06-30",
+    },
 }
 ADMIN_ACCOUNTS = {
     "admin": {"pw":"hayoung2026!","role":"admin","name":"하영자원 본사 관리자"},
@@ -109,6 +199,7 @@ VENDOR_ADMIN_ACCOUNTS = {
     "vendor_a": {"pw":"a1234","role":"vendor_admin","name":"A환경 관리자","vendor":"A환경"},
     "vendor_b": {"pw":"b1234","role":"vendor_admin","name":"B자원 관리자","vendor":"B자원"},
     "vendor_c": {"pw":"c1234","role":"vendor_admin","name":"C로지스 관리자","vendor":"C로지스"},
+    "dj01": {"pw":"ansdudska4","role":"vendor_admin","name":"더존환경 관리자","vendor":"더존환경"},
 }
 ALL_ACCOUNTS = {}
 ALL_ACCOUNTS.update(SCHOOL_ACCOUNTS)
@@ -199,10 +290,32 @@ REAL_DATA_FILE = "hayoung_real_2025.csv"
 CO2_FACTOR = 0.587  # kgCO₂eq per kg 음식물폐기물
 TREE_FACTOR = 6.6   # kg CO₂ per 소나무 1그루/년
 
+@st.cache_data(ttl=300)
 def load_real_data():
-    """업로드된 실제 2025년 수거 데이터 로딩 (3~12월)"""
+    """실제 2025년 수거 데이터 로딩 (CSV→SQLite 마이그레이션 + 캐싱)"""
+    db_table_exists = False
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cnt = conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collection_data'").fetchone()[0]
+        if cnt > 0:
+            row_cnt = conn.execute("SELECT count(*) FROM collection_data").fetchone()[0]
+            if row_cnt > 0:
+                db_table_exists = True
+        conn.close()
+    except:
+        pass
+    if db_table_exists:
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql("SELECT * FROM collection_data", conn)
+        conn.close()
+        return df
+    # CSV에서 로드 후 SQLite에 저장
     try:
         df = pd.read_csv(REAL_DATA_FILE)
+        if not df.empty:
+            conn = sqlite3.connect(DB_PATH)
+            df.to_sql('collection_data', conn, if_exists='replace', index=False)
+            conn.close()
         return df
     except:
         return pd.DataFrame()
@@ -219,6 +332,22 @@ def preprocess_real_data(df):
     df['수거여부'] = df['음식물(kg)'] > 0
     df['탄소감축량(kg)'] = df['음식물(kg)'] * CO2_FACTOR
     df['소나무환산(그루)'] = df['탄소감축량(kg)'] / TREE_FACTOR
+    # ★ 수거업체/기사/시간 기본값 패치 (기존 데이터에 없는 경우)
+    if '수거업체' not in df.columns:
+        df['수거업체'] = '하영자원(본사)'
+    else:
+        df['수거업체'] = df['수거업체'].fillna('하영자원(본사)')
+    if '수거기사' not in df.columns:
+        df['수거기사'] = ''
+    else:
+        df['수거기사'] = df['수거기사'].fillna('')
+    if '수거시간' not in df.columns:
+        df['수거시간'] = ''
+    else:
+        df['수거시간'] = df['수거시간'].fillna('')
+    # 사업장/재활용 컬럼 없으면 0으로
+    if '사업장(kg)' not in df.columns: df['사업장(kg)'] = 0
+    if '재활용(kg)' not in df.columns: df['재활용(kg)'] = 0
     return df
 
 def load_data():
@@ -621,10 +750,19 @@ else:
         st.write("---")
 
         st.subheader("📑 통합 및 개별 정산 시트 🔗")
-        tab_real, tab_total, tab_food, tab_biz, tab_recycle, tab_sched, tab_allbaro, tab_price, tab_contract, tab_map, tab_sub = st.tabs(["📊 실제 수거 데이터(2025)","전체 통합 정산","음식물 정산","사업장 정산","재활용 정산","📅 수거일정 관리","🔗 올바로 보고서","💹 품목별 시세관리","📋 업체별 계약현황","📍 차량 관제","🤝 외주업체"])
+        # ★ 3그룹 카테고리 (모바일 대응)
+        admin_group = st.radio("", ["📊 데이터/관리","💰 정산/보고서","🏢 업체/운영"], horizontal=True, key="admin_grp", label_visibility="collapsed")
+        tab_real=tab_sched=tab_map=tab_total=tab_food=tab_biz=tab_recycle=tab_allbaro=tab_price=tab_vendor_mgmt=tab_sub=None
+        if admin_group == "📊 데이터/관리":
+            tab_real, tab_sched, tab_map = st.tabs(["📊 실제 수거 데이터(2025)","📅 수거일정 관리","📍 차량 관제"])
+        elif admin_group == "💰 정산/보고서":
+            tab_total, tab_food, tab_biz, tab_recycle, tab_allbaro = st.tabs(["전체 통합 정산","음식물 정산","사업장 정산","재활용 정산","🔗 올바로 보고서"])
+        else:
+            tab_price, tab_vendor_mgmt, tab_sub = st.tabs(["💹 품목별 시세관리","🚛 수거업체관리","🤝 외주업체"])
 
         # ★★★ [신규] 실제 수거 데이터 탭 ★★★
-        with tab_real:
+        if tab_real is not None:
+         with tab_real:
             if not df_real.empty:
                 st.markdown("#### 📊 2025년 실제 음식물폐기물 수거 데이터 (3~12월)")
                 st.caption(f"총 {len(df_real):,}건 | 수거일 {df_real['수거여부'].sum():,}건 | 총 수거량 {df_real['음식물(kg)'].sum():,.0f}kg")
@@ -667,7 +805,8 @@ else:
         all_schools_sim = sorted(df_all['학교명'].unique()) if not df_all.empty else []
         all_years_sim = sorted(df_all['년도'].unique(), reverse=True) if not df_all.empty else []
 
-        with tab_total:
+        if tab_total is not None:
+         with tab_total:
             sel_school_t = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_total_school")
             df_t = df_all if sel_school_t == "전체" else df_all[df_all['학교명']==sel_school_t]
             if not df_t.empty:
@@ -692,7 +831,8 @@ else:
             cb1, cb2 = st.columns(2)
             with cb1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
             with cb2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
-        with tab_food:
+        if tab_food is not None:
+         with tab_food:
             sel_school_f = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_food_school")
             df_f = df_all if sel_school_f == "전체" else df_all[df_all['학교명']==sel_school_f]
             if not df_f.empty:
@@ -714,7 +854,8 @@ else:
                             st.dataframe(fm_sum, use_container_width=True, hide_index=True)
                         else:
                             st.dataframe(df_fm[['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True, hide_index=True)
-        with tab_biz:
+        if tab_biz is not None:
+         with tab_biz:
             sel_school_b = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_biz_school")
             df_b = df_all if sel_school_b == "전체" else df_all[df_all['학교명']==sel_school_b]
             if not df_b.empty:
@@ -736,7 +877,8 @@ else:
                             st.dataframe(bm_sum, use_container_width=True, hide_index=True)
                         else:
                             st.dataframe(df_bm[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], use_container_width=True, hide_index=True)
-        with tab_recycle:
+        if tab_recycle is not None:
+         with tab_recycle:
             sel_school_rc = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_rec_school")
             df_rc = df_all if sel_school_rc == "전체" else df_all[df_all['학교명']==sel_school_rc]
             if not df_rc.empty:
@@ -759,7 +901,8 @@ else:
                         else:
                             st.dataframe(df_rcm[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], use_container_width=True, hide_index=True)
         # ★ 수거일정 관리 탭
-        with tab_sched:
+        if tab_sched is not None:
+         with tab_sched:
             st.subheader("📅 수거일정 등록 및 관리")
             sched_mode = st.radio("모드 선택", ["오늘 일정 등록","월별 일정 관리","신규 거래처 추가","업체별 일정 확인"], horizontal=True, key="sched_mode")
 
@@ -892,7 +1035,8 @@ else:
                         st.info("등록된 월별 일정이 없습니다. '월별 일정 관리'에서 등록하세요.")
 
         # ★ 올바로 보고서 탭 (수집운반업자용)
-        with tab_allbaro:
+        if tab_allbaro is not None:
+         with tab_allbaro:
             st.subheader("🔗 올바로시스템 실적보고서 (수집·운반업자용)")
             st.caption("폐기물관리법 제38조, 시행규칙 제60조 / 별지 제30호서식")
             if not df_real.empty:
@@ -925,44 +1069,12 @@ else:
                 st.info("실제 수거 데이터가 없습니다.")
 
         # ★ 품목별 시세관리 탭
-        with tab_price:
+        if tab_price is not None:
+         with tab_price:
             st.subheader("💹 품목별 시세관리")
             # 세션 기반 시세 데이터 초기화
             if 'price_data' not in st.session_state:
-                st.session_state['price_data'] = {
-                    "폐기물": {
-                        "음식물폐기물(혼합)": {"단가":162,"단위":"원/kg","변동":"▲5","카테고리":"음식물"},
-                        "음식물폐기물(분리)": {"단가":140,"단위":"원/kg","변동":"—","카테고리":"음식물"},
-                        "사업장일반폐기물": {"단가":200,"단위":"원/kg","변동":"▼10","카테고리":"사업장"},
-                        "사업장지정폐기물": {"단가":350,"단위":"원/kg","변동":"▲20","카테고리":"사업장"},
-                        "건설폐기물(혼합)": {"단가":45,"단위":"원/kg","변동":"—","카테고리":"건설"},
-                    },
-                    "재활용품": {
-                        "폐지(신문지)":{"단가":120,"단위":"원/kg","변동":"▼15","카테고리":"종이류"},
-                        "폐지(골판지)":{"단가":80,"단위":"원/kg","변동":"▼10","카테고리":"종이류"},
-                        "폐지(서적류)":{"단가":90,"단위":"원/kg","변동":"—","카테고리":"종이류"},
-                        "PET병(투명)":{"단가":450,"단위":"원/kg","변동":"▲30","카테고리":"플라스틱"},
-                        "PET병(유색)":{"단가":200,"단위":"원/kg","변동":"▲10","카테고리":"플라스틱"},
-                        "PP(폴리프로필렌)":{"단가":350,"단위":"원/kg","변동":"▲20","카테고리":"플라스틱"},
-                        "PE(폴리에틸렌)":{"단가":300,"단위":"원/kg","변동":"▲15","카테고리":"플라스틱"},
-                        "PS(폴리스티렌)":{"단가":150,"단위":"원/kg","변동":"▼5","카테고리":"플라스틱"},
-                        "혼합플라스틱":{"단가":100,"단위":"원/kg","변동":"—","카테고리":"플라스틱"},
-                        "스티로폼(EPS)":{"단가":500,"단위":"원/kg","변동":"▲50","카테고리":"플라스틱"},
-                        "알루미늄캔":{"단가":1200,"단위":"원/kg","변동":"▲80","카테고리":"금속류"},
-                        "철캔(스틸)":{"단가":350,"단위":"원/kg","변동":"▲20","카테고리":"금속류"},
-                        "비철금속(구리)":{"단가":8500,"단위":"원/kg","변동":"▲200","카테고리":"금속류"},
-                        "고철(잡철)":{"단가":280,"단위":"원/kg","변동":"▼15","카테고리":"금속류"},
-                        "투명유리병":{"단가":60,"단위":"원/kg","변동":"—","카테고리":"유리류"},
-                        "갈색유리병":{"단가":40,"단위":"원/kg","변동":"—","카테고리":"유리류"},
-                        "혼합유리":{"단가":20,"단위":"원/kg","변동":"▼5","카테고리":"유리류"},
-                        "의류(면직물)":{"단가":200,"단위":"원/kg","변동":"▲10","카테고리":"기타"},
-                        "폐형광등":{"단가":0,"단위":"원/개","변동":"—","카테고리":"기타"},
-                        "폐건전지":{"단가":0,"단위":"원/kg","변동":"—","카테고리":"기타"},
-                        "폐식용유":{"단가":300,"단위":"원/L","변동":"▲30","카테고리":"기타"},
-                        "폐가전제품":{"단가":0,"단위":"원/대","변동":"—","카테고리":"기타"},
-                        "폐목재":{"단가":30,"단위":"원/kg","변동":"—","카테고리":"기타"},
-                    }
-                }
+                st.session_state['price_data'] = load_price_from_db()
             price_mode = st.radio("분류", ["폐기물 (음식물 포함)","재활용품 23종","업체/학교별 단가관리"], horizontal=True, key="price_mode")
 
             if price_mode == "폐기물 (음식물 포함)":
@@ -977,7 +1089,9 @@ else:
                 new_price_w = st.number_input("새 단가 (원)", value=pd_waste[sel_waste]["단가"], step=10, key="new_price_w")
                 if st.button("💾 단가 저장", key="save_waste_price"):
                     st.session_state['price_data']['폐기물'][sel_waste]["단가"] = new_price_w
-                    st.success(f"✅ {sel_waste} 단가 → {new_price_w:,}원 저장!")
+                    v = st.session_state['price_data']['폐기물'][sel_waste]
+                    save_price_to_db('폐기물', sel_waste, new_price_w, v['단위'], '수정', v['카테고리'])
+                    st.success(f"✅ {sel_waste} 단가 → {new_price_w:,}원 저장 (DB 영구 반영)!")
                     st.rerun()
                 # 신규 품목 추가
                 st.write("---")
@@ -1011,7 +1125,9 @@ else:
                 new_price_r = st.number_input("새 단가 (원)", value=pd_recy[sel_recy]["단가"], step=10, key="new_price_r")
                 if st.button("💾 단가 저장", key="save_recy_price"):
                     st.session_state['price_data']['재활용품'][sel_recy]["단가"] = new_price_r
-                    st.success(f"✅ {sel_recy} 단가 → {new_price_r:,}원 저장!")
+                    v = st.session_state['price_data']['재활용품'][sel_recy]
+                    save_price_to_db('재활용품', sel_recy, new_price_r, v['단위'], '수정', v['카테고리'])
+                    st.success(f"✅ {sel_recy} 단가 → {new_price_r:,}원 저장 (DB 영구 반영)!")
                     st.rerun()
                 # 신규 추가
                 st.write("---")
@@ -1049,57 +1165,54 @@ else:
                     st.dataframe(pd.DataFrame(cp_rows), use_container_width=True, hide_index=True)
 
         # ★ 업체별 계약현황 탭
-        with tab_contract:
-            st.subheader("📋 업체별 계약현황")
-            if 'contract_data' not in st.session_state:
-                st.session_state['contract_data'] = {}
-                for vn, vd in VENDOR_DATA.items():
-                    st.session_state['contract_data'][vn] = {
-                        "대표":vd['대표'],"사업자번호":vd['사업자번호'],"계약시작":"2025-04-01",
-                        "계약만료":vd['계약만료'],"상태":"정상" if vd['안전점수']>=90 else "주의",
-                        "품목단가":{"음식물폐기물":162,"사업장일반폐기물":200,"재활용(혼합)":300}
-                    }
-            # 업체 선택 버튼
-            ct_vendor_list = list(st.session_state['contract_data'].keys())
-            ct_cols = st.columns(len(ct_vendor_list))
-            for ci, cvn in enumerate(ct_vendor_list):
-                with ct_cols[ci]:
-                    if st.button(f"🏢 {cvn}", use_container_width=True, key=f"ct_btn_{cvn}"):
-                        st.session_state['sel_contract_vendor'] = cvn
-            sel_cv = st.session_state.get('sel_contract_vendor', ct_vendor_list[0])
-            cv_data = st.session_state['contract_data'][sel_cv]
+        # ★ 수거업체관리 탭
+        if tab_vendor_mgmt is not None:
+         with tab_vendor_mgmt:
+            st.subheader("🚛 수거업체 관리")
+            st.caption("본사 + 외주 전체 수거업체의 품목별 수거현황을 관리합니다.")
+            all_vendors = ["하영자원(본사)"] + list(VENDOR_DATA.keys())
+            # 업체 총괄 테이블
+            mgmt_rows = []
+            for vn in all_vendors:
+                if vn == "하영자원(본사)":
+                    v_sch = []; 
+                    for did in ['driver01','driver02','driver03']: v_sch.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
+                    v_drivers = 3; v_cars = 2
+                else:
+                    vd = VENDOR_DATA[vn]; v_sch = vd['schools']; v_drivers = len(vd.get('drivers',[])); v_cars = len(vd.get('차량',[]))
+                mgmt_rows.append({'업체명':vn,'담당학교수':len(v_sch),'기사수':v_drivers,'차량수':v_cars})
+            st.dataframe(pd.DataFrame(mgmt_rows), use_container_width=True, hide_index=True)
 
-            # 계약 정보 표시
-            st.markdown(f'<div style="background:linear-gradient(135deg,#34a853,#4caf50);padding:14px;border-radius:10px;color:white;"><b>{sel_cv}</b> | 대표: {cv_data["대표"]} | 사업자: {cv_data["사업자번호"]} | 계약: {cv_data["계약시작"]} ~ {cv_data["계약만료"]} | 상태: {cv_data["상태"]}</div>', unsafe_allow_html=True)
+            # 품목별 하위시트
+            st.write("---")
+            st.markdown("#### 📦 품목별 수거현황")
+            item_tabs_mgmt = st.tabs(["🗑️ 음식물","🗄️ 사업장","♻️ 재활용"])
+            item_cols_map = [("음식물(kg)","음식물"),("사업장(kg)","사업장"),("재활용(kg)","재활용")]
+            for iti, (icol, ilabel) in enumerate(item_cols_map):
+                with item_tabs_mgmt[iti]:
+                    st.markdown(f"**{ilabel} 품목 업체별 현황**")
+                    if not df_real.empty and icol in df_real.columns:
+                        for vn in all_vendors:
+                            if vn == "하영자원(본사)":
+                                v_sch = []; 
+                                for did in ['driver01','driver02','driver03']: v_sch.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
+                            else:
+                                v_sch = VENDOR_DATA[vn]['schools']
+                            df_vn = df_real[(df_real['학교명'].isin(v_sch)) & (df_real['수거여부'])]
+                            total = df_vn[icol].sum() if not df_vn.empty else 0
+                            if total > 0:
+                                with st.expander(f"🏢 {vn} - {ilabel} {total:,.0f}kg"):
+                                    vn_sum = df_vn.groupby('학교명').agg(수거량=(icol,'sum')).reset_index().sort_values('수거량',ascending=False)
+                                    st.dataframe(vn_sum, use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"{ilabel} 수거 데이터가 없습니다.")
 
-            # 품목별 계약단가 하위시트
-            ct_sub1, ct_sub2 = st.tabs(["💰 품목별 계약단가","✏️ 단가 수정/추가"])
-            with ct_sub1:
-                st.markdown(f"#### {sel_cv} 품목별 계약단가")
-                ct_rows = [{"품목":k,"계약단가(원/kg)":v} for k,v in cv_data["품목단가"].items()]
-                st.dataframe(pd.DataFrame(ct_rows), use_container_width=True, hide_index=True)
-            with ct_sub2:
-                st.markdown("**✏️ 기존 품목 단가 수정**")
-                sel_ct_item = st.selectbox("품목 선택", list(cv_data["품목단가"].keys()), key="ct_edit_item")
-                new_ct_price = st.number_input("새 단가 (원/kg)", value=cv_data["품목단가"][sel_ct_item], step=10, key="ct_new_price")
-                if st.button("💾 계약단가 수정", key="ct_save"):
-                    st.session_state['contract_data'][sel_cv]["품목단가"][sel_ct_item] = new_ct_price
-                    st.success(f"✅ {sel_cv} - {sel_ct_item} → {new_ct_price:,}원 수정!")
-                    st.rerun()
-                st.write("---")
-                st.markdown("**➕ 신규 품목 추가**")
-                new_ct_name = st.text_input("품목명", key="ct_new_name")
-                new_ct_p = st.number_input("단가 (원/kg)", value=150, step=10, key="ct_new_p")
-                if st.button("➕ 계약 품목 추가", key="ct_add"):
-                    if new_ct_name:
-                        st.session_state['contract_data'][sel_cv]["품목단가"][new_ct_name] = new_ct_p
-                        st.success(f"✅ {sel_cv} - {new_ct_name} ({new_ct_p:,}원) 추가!")
-                        st.rerun()
-
-        with tab_map:
+        if tab_map is not None:
+         with tab_map:
             st.write("📍 **수거 차량 실시간 GPS 관제**")
             st.map(pd.DataFrame({'lat':[37.20,37.25],'lon':[127.05,127.10]}))
-        with tab_sub:
+        if tab_sub is not None:
+         with tab_sub:
             st.subheader("🤝 외주 수거업체 관리")
             # 계약 갱신 알림
             from datetime import datetime as dt_cls
@@ -1203,7 +1316,34 @@ else:
                 st.download_button("📋 안전평가 결과서 다운로드", data=create_safety_report_excel(sel_v, VENDOR_DATA[sel_v]),
                                    file_name=f"{sel_v}_안전평가결과서_{CURRENT_DATE}.xlsx", use_container_width=True)
             with ac2:
-                st.caption(f"※ 외주업체 상세 관리는 해당 업체 관리자 모드(vendor_a/b/c)에서 확인하세요.")
+                st.caption(f"※ 외주업체 상세 관리는 해당 업체 관리자 모드에서 확인하세요.")
+            # ★ 계약현황 하위시트
+            st.write("---")
+            st.subheader("📋 업체별 계약현황")
+            if 'contract_data' not in st.session_state:
+                st.session_state['contract_data'] = load_contracts_from_db()
+            sel_cv = st.selectbox("업체 선택", list(st.session_state['contract_data'].keys()), key="ct_vendor_sel")
+            cv_data = st.session_state['contract_data'][sel_cv]
+            st.markdown(f'<div style="background:linear-gradient(135deg,#34a853,#4caf50);padding:12px;border-radius:10px;color:white;"><b>{sel_cv}</b> | 대표: {cv_data["대표"]} | 계약: {cv_data["계약시작"]}~{cv_data["계약만료"]} | {cv_data["상태"]}</div>', unsafe_allow_html=True)
+            ct_sub1, ct_sub2 = st.tabs(["💰 품목별 계약단가","✏️ 수정/추가"])
+            with ct_sub1:
+                ct_rows = [{"품목":k,"계약단가(원/kg)":v} for k,v in cv_data["품목단가"].items()]
+                st.dataframe(pd.DataFrame(ct_rows), use_container_width=True, hide_index=True)
+            with ct_sub2:
+                sel_ct_item = st.selectbox("품목", list(cv_data["품목단가"].keys()), key="ct_edit_item")
+                new_ct_p = st.number_input("새 단가", value=cv_data["품목단가"][sel_ct_item], step=10, key="ct_new_price")
+                if st.button("💾 수정", key="ct_save"):
+                    st.session_state['contract_data'][sel_cv]["품목단가"][sel_ct_item] = new_ct_p
+                    save_contract_price(sel_cv, sel_ct_item, new_ct_p)
+                    st.success(f"✅ {sel_cv} - {sel_ct_item} → {new_ct_p:,}원 (DB 영구 반영)"); st.rerun()
+                st.write("---")
+                new_ct_name = st.text_input("신규 품목명", key="ct_new_name")
+                new_ct_val = st.number_input("단가", value=150, step=10, key="ct_new_p")
+                if st.button("➕ 추가", key="ct_add"):
+                    if new_ct_name:
+                        st.session_state['contract_data'][sel_cv]["품목단가"][new_ct_name] = new_ct_val
+                        save_contract_price(sel_cv, new_ct_name, new_ct_val)
+                        st.success(f"✅ 추가! (DB 영구 반영)"); st.rerun()
 
         # 관리자 사이드바 - 데이터 업로드/백업
         with st.sidebar:
@@ -1959,6 +2099,12 @@ else:
                             except:
                                 merged = real_row
                             merged.to_csv(REAL_DATA_FILE, index=False)
+                            # SQLite 동기화
+                            try:
+                                conn = sqlite3.connect(DB_PATH)
+                                real_row.to_sql('collection_data', conn, if_exists='append', index=False)
+                                conn.close()
+                            except: pass
                             st.success(f"✅ {target} 수거 실적 전송 완료!")
                             st.caption(f"📡 {vendor_name} | {user_name} | {now_time} → 본사+행정실 실시간 반영")
                             time.sleep(1); st.rerun()
@@ -1997,7 +2143,7 @@ else:
         with vm4: st.metric("계약 만료", va_data.get('계약만료',''))
 
         # 메인 탭
-        va_t1, va_t2, va_t3, va_t4, va_t5 = st.tabs(["📊 거래처별 수거현황","💰 정산/세금계산서","🔗 올바로 보고서","📅 수거일정","🚚 기사 관리"])
+        va_t1, va_t2, va_t3, va_t6, va_t4, va_t5 = st.tabs(["📊 거래처별 수거현황","💰 정산/세금계산서","🔗 올바로 보고서","🏫 거래처/데이터 관리","📅 수거일정","🚚 기사 관리"])
 
         # ===== 탭1: 거래처별 수거현황 (품목→년도→월) =====
         with va_t1:
@@ -2105,6 +2251,74 @@ else:
                     st.info("담당 학교의 수거 데이터가 없습니다.")
             else:
                 st.info("실제 수거 데이터가 없습니다.")
+
+        # ===== 탭6: 거래처 리스트 + 수거데이터 업로드 =====
+        with va_t6:
+            st.subheader(f"🏫 {va_vendor} 거래처 및 수거데이터 관리")
+            st.caption("외주업체 자체 거래처·수거 데이터입니다. (본사 연동 불필요)")
+            va_sub = st.tabs(["📋 거래처 리스트","📤 수거데이터 업로드","🔗 올바로 연동"])
+            # 세션 키
+            va_cust_key = f"va_customers_{va_vendor}"
+            va_data_key = f"va_upload_data_{va_vendor}"
+            if va_cust_key not in st.session_state:
+                st.session_state[va_cust_key] = list(va_schools)  # 기존 학교 복사
+            if va_data_key not in st.session_state:
+                st.session_state[va_data_key] = pd.DataFrame()
+
+            with va_sub[0]:
+                st.markdown("**현재 등록된 거래처 리스트**")
+                cust_list = st.session_state[va_cust_key]
+                for ci, cname in enumerate(cust_list):
+                    cc1, cc2 = st.columns([4,1])
+                    with cc1: st.write(f"  {ci+1}. {cname}")
+                    with cc2:
+                        if st.button("❌", key=f"va_del_c_{va_vendor}_{ci}"):
+                            st.session_state[va_cust_key].remove(cname)
+                            st.rerun()
+                st.write("---")
+                new_cust = st.text_input("신규 거래처명", placeholder="예: 동탄제일초등학교", key=f"va_new_cust_{va_vendor}")
+                if st.button("➕ 거래처 추가", key=f"va_add_cust_{va_vendor}"):
+                    if new_cust and new_cust not in cust_list:
+                        st.session_state[va_cust_key].append(new_cust)
+                        st.success(f"✅ {new_cust} 추가!")
+                        st.rerun()
+
+            with va_sub[1]:
+                st.markdown("**📤 자체 수거데이터 업로드**")
+                st.caption("CSV/엑셀 파일을 업로드하면 자체 데이터로 저장됩니다.")
+                va_file = st.file_uploader("파일 선택", type=['csv','xlsx'], key=f"va_upload_{va_vendor}")
+                if va_file:
+                    try:
+                        df_up = pd.read_csv(va_file) if va_file.name.endswith('.csv') else pd.read_excel(va_file)
+                        st.success(f"✅ {len(df_up)}건 로드 완료")
+                        st.dataframe(df_up.head(10), use_container_width=True, hide_index=True)
+                        if st.button("💾 데이터 저장", key=f"va_save_data_{va_vendor}"):
+                            if not st.session_state[va_data_key].empty:
+                                st.session_state[va_data_key] = pd.concat([st.session_state[va_data_key], df_up], ignore_index=True)
+                            else:
+                                st.session_state[va_data_key] = df_up
+                            st.success(f"✅ {len(df_up)}건 저장! (총 {len(st.session_state[va_data_key])}건)")
+                    except Exception as e:
+                        st.error(f"파일 읽기 실패: {e}")
+                # 저장된 데이터 표시
+                if not st.session_state[va_data_key].empty:
+                    st.write("---")
+                    st.markdown(f"**📊 저장된 자체 데이터 ({len(st.session_state[va_data_key])}건)**")
+                    st.dataframe(st.session_state[va_data_key].tail(20), use_container_width=True, hide_index=True)
+
+            with va_sub[2]:
+                st.markdown("**🔗 올바로시스템 전자인계서 연동**")
+                st.caption("자체 수거데이터를 올바로시스템에 전송합니다.")
+                va_saved = st.session_state[va_data_key]
+                if not va_saved.empty:
+                    st.metric("전송 대상", f"{len(va_saved)}건")
+                    if st.button("📤 올바로시스템 전송", type="primary", use_container_width=True, key=f"va_allbaro_send_{va_vendor}"):
+                        with st.spinner("한국환경공단 올바로시스템 연동 중..."):
+                            time.sleep(2)
+                        st.success(f"✅ {len(va_saved)}건 올바로시스템 전자인계서 전송 완료!")
+                        st.caption(f"전송시각: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 상태: 전송완료")
+                else:
+                    st.info("업로드된 자체 수거데이터가 없습니다. 먼저 데이터를 업로드하세요.")
 
         # ===== 탭4: 수거일정 =====
         with va_t4:
