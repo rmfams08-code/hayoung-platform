@@ -402,6 +402,10 @@ if not df_real.empty:
         df_all = df_all[~df_all['임시_월별'].isin(real_months)].copy()
         df_all = pd.concat([df_all, df_real_sync], ignore_index=True)
         df_all = df_all.drop(columns=['임시_월별'], errors='ignore')
+        # ★ [중복 방지] concat 후 날짜+학교명 기준 중복 행 제거
+        dedup_base = [c for c in ['날짜','학교명','음식물(kg)'] if c in df_all.columns]
+        if dedup_base:
+            df_all = df_all.drop_duplicates(subset=dedup_base, keep='last')
     else:
         df_all = df_real_sync.copy()
 
@@ -750,6 +754,18 @@ def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
     # ★ 한글 폰트 등록 (1회만 실행, 전환경 대응)
     KR_FONT = _register_korean_font()
 
+    # ★ [중복 제거] 동일 날짜+학교+수거량 행이 2번 들어오는 문제 방지
+    df_pdf = df_month.copy()
+    # 날짜 컬럼 통일 (수거일 or 날짜)
+    date_col = '수거일' if '수거일' in df_pdf.columns else '날짜'
+    # 중복 판별 기준 컬럼 설정 (존재하는 컬럼만 사용)
+    dedup_cols = [c for c in [date_col, '학교명', '음식물(kg)', '단위(L)', '공급가'] if c in df_pdf.columns]
+    if dedup_cols:
+        df_pdf = df_pdf.drop_duplicates(subset=dedup_cols, keep='first')
+    # 날짜 순 정렬
+    if date_col in df_pdf.columns:
+        df_pdf = df_pdf.sort_values(date_col).reset_index(drop=True)
+
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
@@ -788,7 +804,7 @@ def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
     c.setFont(KR_FONT, 8)
     row_y = table_y - 6*mm
     total_qty = 0; total_amt = 0
-    for ri, (_, row) in enumerate(df_month.iterrows()):
+    for ri, (_, row) in enumerate(df_pdf.iterrows()):
         if row_y < 35*mm:
             c.showPage(); row_y = h - 25*mm
             c.setFont(KR_FONT, 8)
