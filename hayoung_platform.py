@@ -1072,7 +1072,8 @@ else:
                 for vn in all_vendor_names:
                     v_sch = get_vendor_schools(vn)
                     icon = "🏢" if vn.startswith("하영") else "🤝"
-                    sel_vs = st.multiselect(f"{icon} {vn} 수거 학교", v_sch, default=st.session_state.get(f'schedule_{vn}', v_sch), key=f"sched_{vn}_tab")
+                    _sched_default = [s for s in st.session_state.get(f'schedule_{vn}', v_sch) if s in v_sch]
+                    sel_vs = st.multiselect(f"{icon} {vn} 수거 학교", v_sch, default=_sched_default, key=f"sched_{vn}_tab")
                     st.session_state[f'schedule_{vn}'] = sel_vs
                 st.success("✅ 수거일정이 각 기사 앱에 실시간 반영됩니다.")
                 # 오늘 일정 요약
@@ -2645,7 +2646,7 @@ else:
                 st.write("---")
                 va_cust_key = f"va_customers_{va_vendor}"
                 all_va_sch = st.session_state.get(va_cust_key, va_schools)
-                new_today = st.multiselect("오늘 수거 학교 수정", all_va_sch, default=today_sch, key=f"va_today_edit_{va_vendor}")
+                new_today = st.multiselect("오늘 수거 학교 수정", all_va_sch, default=[s for s in today_sch if s in all_va_sch], key=f"va_today_edit_{va_vendor}")
                 if st.button("💾 오늘 일정 저장", key=f"va_save_today_{va_vendor}"):
                     st.session_state[f'schedule_{va_vendor}'] = new_today
                     st.success("✅ 오늘 일정 저장!"); st.rerun()
