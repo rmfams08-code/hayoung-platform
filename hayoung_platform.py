@@ -674,22 +674,39 @@ def create_allbaro_report(df_real, report_role, entity_name, year, item_filter=N
 
 
 def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
-    """월말거래명세서 PDF 생성 (한글 깨짐 방지 - WenQuanYi Zen Hei)"""
+    """월말거래명세서 PDF 생성 (안전성 강화)"""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.pdfgen import canvas
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    # 한글 폰트 등록 (WQY Zen Hei - 한중일 지원 TTF)
+    import os
+
+    # 한글 폰트 등록 (안전성 강화)
     KR_FONT = 'KoreanFont'
+    font_registered = False
+    
     try:
-        pdfmetrics.registerFont(TTFont(KR_FONT, '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc', subfontIndex=0))
-    except:
+        # 1순위: 작업 폴더 안에 'NanumGothic.ttf' 파일이 있는 경우
+        if os.path.exists('NanumGothic.ttf'):
+            pdfmetrics.registerFont(TTFont(KR_FONT, 'NanumGothic.ttf'))
+            font_registered = True
+        # 2순위: 스트림릿 클라우드 기본 리눅스 폰트 경로
+        else:
+            pdfmetrics.registerFont(TTFont(KR_FONT, '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc', subfontIndex=0))
+            font_registered = True
+    except Exception:
         pass
+
+    # ★ Fallback (대체재): 폰트 등록 실패 시 프로그램 멈춤 방지
+    if not font_registered:
+        KR_FONT = 'Helvetica'
+
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
+    
     # 헤더
     c.setFont(KR_FONT, 18)
     c.drawCentredString(w/2, h-35*mm, '거 래 명 세 서')
