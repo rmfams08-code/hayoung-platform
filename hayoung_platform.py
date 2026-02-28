@@ -350,38 +350,6 @@ def preprocess_real_data(df):
     if '재활용(kg)' not in df.columns: df['재활용(kg)'] = 0
     return df
 
-def load_data():
-    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
-    try:
-        df = pd.read_csv(DB_FILE)
-        if not df['날짜'].str.contains('2024').any():
-            raise ValueError("과거 연도 데이터가 없어 새로 생성합니다.")
-        return df
-    except:
-        sample_data = []
-        for year in range(CURRENT_YEAR - 2, CURRENT_YEAR + 1):
-            if year < CURRENT_YEAR:
-                months_to_gen = [(11, 30), (12, 31)]
-            else:
-                months_to_gen = [(m, 28 if m == 2 else 30 if m in [4,6,9,11] else 31) for m in range(1, CURRENT_MONTH + 1)]
-            for month, days in months_to_gen:
-                for day in range(1, days + 1, 3): 
-                    if day % 7 in [0, 1]: continue 
-                    for school, count in STUDENT_COUNTS.items():
-                        food = int(count * random.uniform(0.1, 0.2))
-                        recycle = int(count * random.uniform(0.05, 0.1))
-                        biz = int(count * random.uniform(0.02, 0.05))
-                        status = "정산완료" if year < CURRENT_YEAR else "정산대기"
-                        sample_data.append({
-                            "날짜": f"{year}-{month:02d}-{day:02d} {random.randint(8, 15):02d}:{random.randint(0, 59):02d}:{random.randint(0, 59):02d}",
-                            "학교명": school, "학생수": count, "수거업체": "하영자원(본사 직영)",
-                            "음식물(kg)": food, "재활용(kg)": recycle, "사업장(kg)": biz,
-                            "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": status
-                        })
-        df = pd.DataFrame(sample_data, columns=cols)
-        df.to_csv(DB_FILE, index=False)
-        return df
-
 def save_data(new_row):
     df = load_data()
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
