@@ -58,6 +58,179 @@ def db_delete(table, where):
 
 init_db()
 
+# ==========================================
+# ★ 공통 상수 & 재사용 함수 (중복 제거)
+# ==========================================
+HEADQUARTER_DRIVERS = ['driver01','driver02','driver03']  # 본사 기사 ID
+
+def get_all_vendor_names():
+    """전체 업체명 리스트 (본사 + 외주)"""
+    return ["하영자원(본사)"] + list(VENDOR_DATA.keys())
+
+def get_vendor_schools(vn):
+    """업체별 담당 학교 목록"""
+    if vn == "하영자원(본사)":
+        s = []
+        for did in HEADQUARTER_DRIVERS:
+            s.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
+        return s
+    return VENDOR_DATA.get(vn,{}).get('schools',[])
+
+def get_vendor_drivers(vn):
+    """업체별 기사 이름 리스트"""
+    if vn == "하영자원(본사)":
+        return [DRIVER_ACCOUNTS[d]['name'] for d in HEADQUARTER_DRIVERS]
+    return [DRIVER_ACCOUNTS[d]['name'] for d in VENDOR_DATA.get(vn,{}).get('drivers',[]) if d in DRIVER_ACCOUNTS]
+
+def add_school_to_vendor(vn, school_name):
+    """학교를 업체에 배정"""
+    if vn == "하영자원(본사)":
+        DRIVER_ACCOUNTS[HEADQUARTER_DRIVERS[0]]['schools'].append(school_name)
+    elif vn in VENDOR_DATA:
+        VENDOR_DATA[vn]['schools'].append(school_name)
+
+def remove_school_from_vendor(vn, school_name):
+    """학교를 업체에서 제거"""
+    if vn == "하영자원(본사)":
+        for did in HEADQUARTER_DRIVERS:
+            if school_name in DRIVER_ACCOUNTS[did].get('schools',[]):
+                DRIVER_ACCOUNTS[did]['schools'].remove(school_name)
+                return True
+    elif vn in VENDOR_DATA:
+        if school_name in VENDOR_DATA[vn]['schools']:
+            VENDOR_DATA[vn]['schools'].remove(school_name)
+            return True
+    return False
+
+def render_monthly_schedule_view(vendor_name, current_month, show_delete=False, show_driver=False, key_suffix=""):
+    """월별 수거일정 조회 공통 UI"""
+    has_monthly = False
+    for m in range(1, 13):
+        sk = f"monthly_sched_{vendor_name}_{m}"
+        if sk in st.session_state:
+            has_monthly = True
+            sd = st.session_state[sk]
+            # 기사 배정 정보
+            driver_info = ""
+            if show_driver:
+                driver_key = f"sched_driver_{vendor_name}_{m}"
+                driver_info = f" | 기사: {st.session_state.get(driver_key, '미지정')}"
+            label = f"📅 {m}월: {'/'.join(sd.get('요일',[]))} | {'/'.join(sd.get('품목',[]))}{driver_info}"
+            with st.expander(label, expanded=(m==current_month)):
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    st.write(f"**수거 요일:** {', '.join(sd.get('요일',[]))}")
+                    st.write(f"**수거 품목:** {', '.join(sd.get('품목',[]))}")
+                with sc2:
+                    st.write(f"**대상 학교 ({len(sd.get('학교',[]))}):** {', '.join(sd.get('학교',[]))}")
+                    if show_driver:
+                        st.write(f"**담당 기사:** {st.session_state.get(f'sched_driver_{vendor_name}_{m}', '미지정')}")
+                if show_delete:
+                    if st.button(f"🗑️ {m}월 일정 삭제", key=f"del_sched_{vendor_name}_{m}_{key_suffix}"):
+                        del st.session_state[sk]
+                        st.success(f"✅ {m}월 일정 삭제!"); st.rerun()
+    if not has_monthly:
+        st.info("등록된 월별 일정이 없습니다.")
+
+def render_allbaro_download(df_data, role, entity_name, key_prefix):
+    """올바로 보고서 다운로드 공통 UI"""
+    if df_data.empty:
+        st.info("수거 데이터가 없습니다.")
+        return
+    ab_years = sorted(df_data['년도'].unique(), reverse=True)
+    sel_yr = st.selectbox("📅 년도 선택", ab_years, key=f"{key_prefix}_yr")
+    sel_item = st.selectbox("📦 품목 선택", ["전체","음식물","사업장","재활용"], key=f"{key_prefix}_item")
+    # 미리보기
+    df_ab = df_data[df_data['년도']==str(sel_yr)]
+    if sel_item != "전체":
+        item_col = {"음식물":"음식물(kg)","사업장":"사업장(kg)","재활용":"재활용(kg)"}.get(sel_item)
+        if item_col and item_col in df_ab.columns:
+            df_ab = df_ab[df_ab[item_col] > 0]
+    if not df_ab.empty and '수거여부' in df_ab.columns:
+        ab_active = df_ab[df_ab['수거여부']]
+        if not ab_active.empty and '학교명' in ab_active.columns:
+            ab_sum = ab_active.groupby('학교명').agg(수거량=('음식물(kg)','sum')).reset_index().sort_values('수거량',ascending=False)
+            st.dataframe(ab_sum, use_container_width=True, hide_index=True)
+            st.metric("총 수거량", f"{ab_sum['수거량'].sum():,.0f} kg")
+    role_label = "배출자" if role == 'emitter' else "수집운반업자"
+    st.download_button(f"📄 올바로 실적보고서 다운로드 ({role_label}용)",
+        data=create_allbaro_report(df_data, role, entity_name, sel_yr, sel_item),
+        file_name=f"올바로_{role_label}_{entity_name}_{sel_yr}_{sel_item}.xlsx",
+        use_container_width=True, key=f"{key_prefix}_dl")
+
+def render_invoice_pdf_section(vendor_name, df_data, year_options, key_prefix):
+    """거래명세서 PDF 생성+다운로드 공통 UI"""
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        sel_yr = st.selectbox("년도", year_options, key=f"{key_prefix}_yr")
+    with c2:
+        sel_month = st.selectbox("월", list(range(1,13)), format_func=lambda x: f"{x}월", key=f"{key_prefix}_month")
+    with c3:
+        schools = sorted(df_data['학교명'].unique()) if not df_data.empty and '학교명' in df_data.columns else []
+        sel_target = st.selectbox("대상", ["전체(통합)"] + schools, key=f"{key_prefix}_target")
+    if st.button("📄 거래명세서 PDF 생성", type="primary", use_container_width=True, key=f"{key_prefix}_gen"):
+        try:
+            month_str = f"{sel_yr}-{sel_month:02d}"
+            df_m = df_data[df_data['년도']==str(sel_yr)] if '년도' in df_data.columns else df_data
+            if '월별' in df_m.columns:
+                df_m = df_m[df_m['월별']==month_str] if month_str in df_m['월별'].values else df_m[df_m['월별'].str.contains(str(sel_month))]
+            if sel_target != "전체(통합)":
+                df_m = df_m[df_m['학교명']==sel_target]
+            target_name = sel_target if sel_target != "전체(통합)" else "전체"
+            if not df_m.empty:
+                pdf_data = create_monthly_invoice_pdf(vendor_name, target_name, sel_month, str(sel_yr), df_m)
+                st.session_state[f'{key_prefix}_data'] = pdf_data
+                st.session_state[f'{key_prefix}_fname'] = f"{vendor_name}_{target_name}_{sel_month}월_거래명세서.pdf"
+                st.success(f"✅ {target_name} {sel_month}월 거래명세서 생성! ({len(df_m)}건)")
+            else:
+                st.warning(f"⚠️ {sel_yr}년 {sel_month}월 해당 데이터가 없습니다.")
+        except Exception as e:
+            st.error(f"PDF 생성 실패: {e}")
+    if f'{key_prefix}_data' in st.session_state:
+        st.download_button(
+            f"📥 {st.session_state.get(f'{key_prefix}_fname','거래명세서.pdf')} 다운로드",
+            data=st.session_state[f'{key_prefix}_data'],
+            file_name=st.session_state.get(f'{key_prefix}_fname','거래명세서.pdf'),
+            mime="application/pdf", use_container_width=True, key=f"{key_prefix}_dl")
+
+def render_settlement_tab(df_data, category, kg_col, cost_col, price_col, all_schools, key_prefix):
+    """정산 탭 공통 UI (음식물/사업장/재활용/전체)"""
+    sel_school = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools, key=f"{key_prefix}_school")
+    df_f = df_data if sel_school == "전체" else df_data[df_data['학교명']==sel_school]
+    if df_f.empty:
+        st.info("데이터가 없습니다.")
+        return
+    sel_yr = st.selectbox("📅 년도 선택", sorted(df_f['년도'].unique(), reverse=True), key=f"{key_prefix}_yr")
+    df_fy = df_f[df_f['년도']==sel_yr]
+    months = sorted(df_fy['월별'].unique())
+    tabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}" for m in months])
+    with tabs[0]:
+        if sel_school == "전체":
+            agg_dict = {kg_col:'sum', cost_col:'sum'}
+            s = df_fy.groupby('학교명').agg(agg_dict).reset_index().sort_values(cost_col, ascending=False)
+            st.dataframe(s, use_container_width=True, hide_index=True)
+        else:
+            show_cols = [c for c in ['날짜','학교명',kg_col,price_col,cost_col,'상태'] if c in df_fy.columns]
+            st.dataframe(df_fy[show_cols], use_container_width=True, hide_index=True)
+    for ti, tm in enumerate(months):
+        with tabs[ti+1]:
+            df_tm = df_fy[df_fy['월별']==tm]
+            if sel_school == "전체":
+                tm_sum = df_tm.groupby('학교명').agg({cost_col:'sum'}).reset_index().sort_values(cost_col, ascending=False)
+                st.dataframe(tm_sum, use_container_width=True, hide_index=True)
+            else:
+                show_cols = [c for c in ['날짜','학교명',kg_col,price_col,cost_col,'상태'] if c in df_tm.columns]
+                st.dataframe(df_tm[show_cols], use_container_width=True, hide_index=True)
+
+def render_esg_cards(total_kg, total_co2, total_tree, total_supply):
+    """ESG 탄소감축 카드 4개 공통 UI"""
+    ec1, ec2, ec3, ec4 = st.columns(4)
+    with ec1: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">♻️ 총 재활용량</div><div class="metric-value-recycle">{total_kg:,.0f}kg</div></div>', unsafe_allow_html=True)
+    with ec2: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌍 CO₂ 감축량</div><div class="metric-value-recycle">{total_co2:,.1f}kg</div></div>', unsafe_allow_html=True)
+    with ec3: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌲 소나무 식재 효과</div><div class="metric-value-recycle">{total_tree:,}그루</div></div>', unsafe_allow_html=True)
+    with ec4: st.markdown(f'<div class="custom-card" style="text-align:center;"><div class="metric-title">💰 환경비용 절감</div><div class="metric-value-total">{total_supply:,.0f}원</div></div>', unsafe_allow_html=True)
+
+
 def load_price_from_db():
     rows = db_get('price_data')
     if rows:
@@ -812,7 +985,9 @@ def create_monthly_invoice_pdf(vendor_name, school_name, month, year, df_month):
         price = row.get('단가', row.get('단가(원)', 170))
         supply = row.get('공급가', qty * price if qty else 0)
         date_str = str(row.get('수거일', row.get('날짜', '')))
-        recycler = str(row.get('재활용자', ''))[:10]
+        recycler = str(row.get('재활용자', '청명제2공장'))[:10]
+        if not recycler or recycler == 'nan':
+            recycler = '청명제2공장'
         remark = str(row.get('비고', ''))[:8]
         if ri % 2 == 0:
             c.setFillColor(colors.Color(0.95,0.97,1.0))
@@ -969,13 +1144,13 @@ else:
         st.subheader("📑 통합 및 개별 정산 시트 🔗")
         # ★ 3그룹 카테고리 (모바일 대응)
         admin_group = st.radio("", ["📊 데이터/관리","💰 정산/보고서","🏢 업체/운영"], horizontal=True, key="admin_grp", label_visibility="collapsed")
-        tab_real=tab_sched=tab_map=tab_total=tab_food=tab_biz=tab_recycle=tab_allbaro=tab_price=tab_vendor_mgmt=tab_sub=None
+        tab_real=tab_sched=tab_map=tab_total=tab_allbaro=tab_price=tab_vendor_mgmt=None
         if admin_group == "📊 데이터/관리":
             tab_real, tab_sched, tab_map = st.tabs(["📊 실제 수거 데이터(2025)","📅 수거일정 관리","📍 차량 관제"])
         elif admin_group == "💰 정산/보고서":
-            tab_total, tab_food, tab_biz, tab_recycle, tab_allbaro = st.tabs(["전체 통합 정산","음식물 정산","사업장 정산","재활용 정산","🔗 올바로 보고서"])
+            tab_total, tab_allbaro = st.tabs(["💰 통합 정산","🔗 올바로 보고서"])
         else:
-            tab_price, tab_vendor_mgmt, tab_sub = st.tabs(["💹 품목별 시세관리","🚛 수거업체관리","🤝 외주업체"])
+            tab_price, tab_vendor_mgmt = st.tabs(["💹 품목별 시세관리","🚛 수거업체 통합관리"])
 
         # ★★★ [신규] 실제 수거 데이터 탭 ★★★
         if tab_real is not None:
@@ -1024,32 +1199,55 @@ else:
 
         if tab_total is not None:
          with tab_total:
-            sel_school_t = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_total_school")
-            df_t = df_all if sel_school_t == "전체" else df_all[df_all['학교명']==sel_school_t]
-            if not df_t.empty:
-                sel_yr_t = st.selectbox("📅 년도 선택", sorted(df_t['년도'].unique(), reverse=True), key="admin_total_yr")
+            # ★ 품목 필터 추가 (기존 4개 탭 → 1개 탭으로 통합)
+            filter_c1, filter_c2, filter_c3 = st.columns(3)
+            with filter_c1:
+                sel_school_t = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_total_school")
+            with filter_c2:
+                sel_category = st.selectbox("📦 품목 필터", ["전체(통합)","🗑️ 음식물","🗄️ 사업장","♻️ 재활용"], key="admin_total_cat")
+            with filter_c3:
+                df_t = df_all if sel_school_t == "전체" else df_all[df_all['학교명']==sel_school_t]
+                yr_options = sorted(df_t['년도'].unique(), reverse=True) if not df_t.empty else []
+                sel_yr_t = st.selectbox("📅 년도 선택", yr_options, key="admin_total_yr") if yr_options else None
+            if not df_t.empty and sel_yr_t:
                 df_ty = df_t[df_t['년도']==sel_yr_t]
+                # 품목별 표시 컬럼 결정
+                cat_map = {
+                    "전체(통합)": (['음식물(kg)','사업장(kg)','재활용(kg)','최종정산액'], '최종정산액', None),
+                    "🗑️ 음식물": (['음식물(kg)','단가(원)','음식물비용'], '음식물비용', '음식물(kg)'),
+                    "🗄️ 사업장": (['사업장(kg)','사업장단가(원)','사업장비용'], '사업장비용', '사업장(kg)'),
+                    "♻️ 재활용": (['재활용(kg)','재활용단가(원)','재활용수익'], '재활용수익', '재활용(kg)'),
+                }
+                data_cols, sort_col, filter_col = cat_map[sel_category]
                 t_months = sorted(df_ty['월별'].unique())
                 t_tabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}" for m in t_months])
                 with t_tabs[0]:
                     if sel_school_t == "전체":
-                        t_sum = df_ty.groupby('학교명').agg({'음식물(kg)':'sum','사업장(kg)':'sum','재활용(kg)':'sum','최종정산액':'sum'}).reset_index().sort_values('최종정산액',ascending=False)
+                        agg_dict = {c:'sum' for c in data_cols if c in df_ty.columns}
+                        t_sum = df_ty.groupby('학교명').agg(agg_dict).reset_index()
+                        if sort_col in t_sum.columns:
+                            t_sum = t_sum.sort_values(sort_col, ascending=False)
                         st.dataframe(t_sum, use_container_width=True, hide_index=True)
                     else:
-                        st.dataframe(df_ty[['날짜','학교명','학생수','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액','상태']], use_container_width=True, hide_index=True)
+                        show_cols = [c for c in ['날짜','학교명'] + data_cols + ['상태'] if c in df_ty.columns]
+                        st.dataframe(df_ty[show_cols], use_container_width=True, hide_index=True)
                 for ti, tm in enumerate(t_months):
                     with t_tabs[ti+1]:
                         df_tm = df_ty[df_ty['월별']==tm]
                         if sel_school_t == "전체":
-                            tm_sum = df_tm.groupby('학교명').agg({'최종정산액':'sum'}).reset_index().sort_values('최종정산액',ascending=False)
+                            agg_dict = {sort_col:'sum'} if sort_col in df_tm.columns else {}
+                            tm_sum = df_tm.groupby('학교명').agg(agg_dict).reset_index()
+                            if sort_col in tm_sum.columns:
+                                tm_sum = tm_sum.sort_values(sort_col, ascending=False)
                             st.dataframe(tm_sum, use_container_width=True, hide_index=True)
                         else:
-                            st.dataframe(df_tm[['날짜','학교명','음식물(kg)','사업장(kg)','재활용(kg)','최종정산액','상태']], use_container_width=True, hide_index=True)
+                            show_cols = [c for c in ['날짜','학교명'] + data_cols + ['상태'] if c in df_tm.columns]
+                            st.dataframe(df_tm[show_cols], use_container_width=True, hide_index=True)
                         # ★ 계산서 발행 + 명세서 다운로드
                         st.write("---")
                         admin_tax = st.radio(f"{tm} 발행유형", ["전자세금계산서(부가세10%)","전자계산서(세율적용X)"], horizontal=True, key=f"adm_tax_{ti}")
                         is_tax_a = "세금" in admin_tax
-                        total_a = df_tm['최종정산액'].sum()
+                        total_a = df_tm['최종정산액'].sum() if '최종정산액' in df_tm.columns else 0
                         sup_a = int(total_a/1.1) if is_tax_a else int(total_a)
                         vat_a = total_a - sup_a if is_tax_a else 0
                         st.caption(f"공급가액: {sup_a:,.0f}원 | 세액: {vat_a:,.0f}원 | 합계: {total_a:,.0f}원")
@@ -1067,126 +1265,20 @@ else:
             cb1, cb2 = st.columns(2)
             with cb1: st.button("🏢 업체별 통합정산서 발송", use_container_width=True)
             with cb2: st.button("🏫 학교별 통합정산서 발송", use_container_width=True)
-            # ★ [신규] 본사 월별 거래명세서 일괄 PDF 생성
+            # ★ 거래명세서 PDF 일괄 생성 (공통 함수 사용)
             st.write("---")
             st.markdown("**📄 월별 거래명세서 PDF 일괄 생성**")
-            adm_pdf_c1, adm_pdf_c2, adm_pdf_c3 = st.columns(3)
-            with adm_pdf_c1:
-                adm_pdf_yr = st.selectbox("년도", sorted(df_all['년도'].unique(), reverse=True) if not df_all.empty else [CURRENT_YEAR], key="adm_pdf_yr")
-            with adm_pdf_c2:
-                adm_pdf_month = st.selectbox("월", list(range(1,13)), format_func=lambda x: f"{x}월", key="adm_pdf_month")
-            with adm_pdf_c3:
-                adm_pdf_target = st.selectbox("대상", ["전체(통합)"] + all_schools_sim, key="adm_pdf_target")
-            if st.button("📄 거래명세서 PDF 생성", type="primary", use_container_width=True, key="adm_batch_pdf"):
-                try:
-                    df_adm_m = df_all[(df_all['년도']==adm_pdf_yr)]
-                    month_str = f"{adm_pdf_yr}-{adm_pdf_month:02d}"
-                    df_adm_m = df_adm_m[df_adm_m['월별']==month_str] if month_str in df_all['월별'].values else df_adm_m[df_adm_m['월별'].str.contains(str(adm_pdf_month))]
-                    if adm_pdf_target != "전체(통합)":
-                        df_adm_m = df_adm_m[df_adm_m['학교명']==adm_pdf_target]
-                    target_name = adm_pdf_target if adm_pdf_target != "전체(통합)" else "전체"
-                    if not df_adm_m.empty:
-                        adm_pdf_data = create_monthly_invoice_pdf("하영자원(본사)", target_name, adm_pdf_month, str(adm_pdf_yr), df_adm_m)
-                        st.session_state['adm_batch_pdf_data'] = adm_pdf_data
-                        st.session_state['adm_batch_pdf_fname'] = f"하영자원_{target_name}_{adm_pdf_month}월_거래명세서.pdf"
-                        st.success(f"✅ {target_name} {adm_pdf_month}월 거래명세서 PDF 생성 완료! ({len(df_adm_m)}건)")
-                    else:
-                        st.warning(f"⚠️ {adm_pdf_yr}년 {adm_pdf_month}월 해당 데이터가 없습니다.")
-                except Exception as e:
-                    st.error(f"PDF 생성 실패: {e}")
-            if 'adm_batch_pdf_data' in st.session_state:
-                st.download_button(
-                    f"📥 {st.session_state.get('adm_batch_pdf_fname','거래명세서.pdf')} 다운로드",
-                    data=st.session_state['adm_batch_pdf_data'],
-                    file_name=st.session_state.get('adm_batch_pdf_fname','거래명세서.pdf'),
-                    mime="application/pdf",
-                    use_container_width=True,
-                    key="adm_batch_pdf_dl"
-                )
-        if tab_food is not None:
-         with tab_food:
-            sel_school_f = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_food_school")
-            df_f = df_all if sel_school_f == "전체" else df_all[df_all['학교명']==sel_school_f]
-            if not df_f.empty:
-                sel_yr_f = st.selectbox("📅 년도 선택", sorted(df_f['년도'].unique(), reverse=True), key="admin_food_yr")
-                df_fy = df_f[df_f['년도']==sel_yr_f]
-                f_months = sorted(df_fy['월별'].unique())
-                f_tabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}" for m in f_months])
-                with f_tabs[0]:
-                    if sel_school_f == "전체":
-                        f_sum = df_fy.groupby('학교명').agg({'음식물(kg)':'sum','음식물비용':'sum'}).reset_index().sort_values('음식물비용',ascending=False)
-                        st.dataframe(f_sum, use_container_width=True, hide_index=True)
-                    else:
-                        st.dataframe(df_fy[['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True, hide_index=True)
-                for fi, fm in enumerate(f_months):
-                    with f_tabs[fi+1]:
-                        df_fm = df_fy[df_fy['월별']==fm]
-                        if sel_school_f == "전체":
-                            fm_sum = df_fm.groupby('학교명').agg({'음식물(kg)':'sum','음식물비용':'sum'}).reset_index().sort_values('음식물비용',ascending=False)
-                            st.dataframe(fm_sum, use_container_width=True, hide_index=True)
-                        else:
-                            st.dataframe(df_fm[['날짜','학교명','음식물(kg)','단가(원)','음식물비용','상태']], use_container_width=True, hide_index=True)
-        if tab_biz is not None:
-         with tab_biz:
-            sel_school_b = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_biz_school")
-            df_b = df_all if sel_school_b == "전체" else df_all[df_all['학교명']==sel_school_b]
-            if not df_b.empty:
-                sel_yr_b = st.selectbox("📅 년도 선택", sorted(df_b['년도'].unique(), reverse=True), key="admin_biz_yr")
-                df_by = df_b[df_b['년도']==sel_yr_b]
-                b_months = sorted(df_by['월별'].unique())
-                b_tabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}" for m in b_months])
-                with b_tabs[0]:
-                    if sel_school_b == "전체":
-                        b_sum = df_by.groupby('학교명').agg({'사업장(kg)':'sum','사업장비용':'sum'}).reset_index().sort_values('사업장비용',ascending=False)
-                        st.dataframe(b_sum, use_container_width=True, hide_index=True)
-                    else:
-                        st.dataframe(df_by[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], use_container_width=True, hide_index=True)
-                for bi, bm in enumerate(b_months):
-                    with b_tabs[bi+1]:
-                        df_bm = df_by[df_by['월별']==bm]
-                        if sel_school_b == "전체":
-                            bm_sum = df_bm.groupby('학교명').agg({'사업장(kg)':'sum','사업장비용':'sum'}).reset_index()
-                            st.dataframe(bm_sum, use_container_width=True, hide_index=True)
-                        else:
-                            st.dataframe(df_bm[['날짜','학교명','사업장(kg)','사업장단가(원)','사업장비용']], use_container_width=True, hide_index=True)
-        if tab_recycle is not None:
-         with tab_recycle:
-            sel_school_rc = st.selectbox("🏫 거래처(학교) 선택", ["전체"] + all_schools_sim, key="admin_rec_school")
-            df_rc = df_all if sel_school_rc == "전체" else df_all[df_all['학교명']==sel_school_rc]
-            if not df_rc.empty:
-                sel_yr_rc = st.selectbox("📅 년도 선택", sorted(df_rc['년도'].unique(), reverse=True), key="admin_rec_yr")
-                df_rcy = df_rc[df_rc['년도']==sel_yr_rc]
-                rc_months = sorted(df_rcy['월별'].unique())
-                rc_tabs = st.tabs(["📅 연간 전체"] + [f"🗓️ {m}" for m in rc_months])
-                with rc_tabs[0]:
-                    if sel_school_rc == "전체":
-                        rc_sum = df_rcy.groupby('학교명').agg({'재활용(kg)':'sum','재활용수익':'sum'}).reset_index().sort_values('재활용수익',ascending=False)
-                        st.dataframe(rc_sum, use_container_width=True, hide_index=True)
-                    else:
-                        st.dataframe(df_rcy[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], use_container_width=True, hide_index=True)
-                for rci, rcm in enumerate(rc_months):
-                    with rc_tabs[rci+1]:
-                        df_rcm = df_rcy[df_rcy['월별']==rcm]
-                        if sel_school_rc == "전체":
-                            rcm_sum = df_rcm.groupby('학교명').agg({'재활용(kg)':'sum','재활용수익':'sum'}).reset_index()
-                            st.dataframe(rcm_sum, use_container_width=True, hide_index=True)
-                        else:
-                            st.dataframe(df_rcm[['날짜','학교명','재활용(kg)','재활용단가(원)','재활용수익']], use_container_width=True, hide_index=True)
+            render_invoice_pdf_section("하영자원(본사)", df_all, 
+                sorted(df_all['년도'].unique(), reverse=True) if not df_all.empty else [str(CURRENT_YEAR)], 
+                "adm_batch_pdf")
         # ★ 수거일정 관리 탭
         if tab_sched is not None:
          with tab_sched:
             st.subheader("📅 수거일정 등록 및 관리")
-            sched_mode = st.radio("모드 선택", ["오늘 일정 등록","월별 일정 관리","신규 거래처 추가","업체별 일정 확인"], horizontal=True, key="sched_mode")
+            sched_mode = st.radio("모드 선택", ["오늘 일정 등록","월별 일정 관리","업체별 일정 확인"], horizontal=True, key="sched_mode")
 
-            # === 모든 업체+본사 학교 목록 통합 관리 ===
-            all_vendor_names = ["하영자원(본사)"] + list(VENDOR_DATA.keys())
-            def get_vendor_schools(vn):
-                if vn == "하영자원(본사)":
-                    s = []
-                    for did in ['driver01','driver02','driver03']:
-                        s.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
-                    return s
-                return VENDOR_DATA.get(vn,{}).get('schools',[])
+            # === 모든 업체+본사 학교 목록 (공통 함수 사용) ===
+            all_vendor_names = get_all_vendor_names()
 
             if sched_mode == "오늘 일정 등록":
                 st.markdown("#### 📋 오늘의 수거일정 등록")
@@ -1205,9 +1297,9 @@ else:
                 for vn in all_vendor_names:
                     sch_list = st.session_state.get(f'schedule_{vn}', [])
                     if vn == '하영자원(본사)':
-                        drivers = [DRIVER_ACCOUNTS[d]['name'] for d in ['driver01','driver02','driver03']]
+                        drivers = get_vendor_drivers(vn)
                     else:
-                        drivers = [DRIVER_ACCOUNTS[d]['name'] for d in VENDOR_DATA.get(vn,{}).get('drivers',[]) if d in DRIVER_ACCOUNTS]
+                        drivers = get_vendor_drivers(vn)
                     sched_rows.append({'업체명':vn, '수거학교수':len(sch_list), '담당기사':'/'.join(drivers), '학교목록':', '.join(sch_list[:3]) + ('...' if len(sch_list)>3 else '')})
                 st.dataframe(pd.DataFrame(sched_rows), use_container_width=True, hide_index=True)
 
@@ -1258,111 +1350,40 @@ else:
                                     del st.session_state[sk]
                                     st.success(f"✅ {m}월 일정 삭제!"); st.rerun()
 
-            elif sched_mode == "신규 거래처 추가":
-                st.markdown("#### ➕ 신규 거래처(학교) 추가")
-                st.caption("등록된 학교 외 신규 학교를 추가하고 업체에 배정합니다.")
-                # 신규 학교 직접 입력
-                new_school_name = st.text_input("신규 학교(거래처)명 입력", placeholder="예: 동탄초등학교", key="new_school_input")
-                new_school_students = st.number_input("학생수 (명)", min_value=0, value=300, step=50, key="new_school_students")
-                assign_vendor = st.selectbox("배정 업체", all_vendor_names, key="assign_vendor")
-                if st.button("➕ 신규 거래처 등록", type="primary", use_container_width=True, key="add_new_school"):
-                    if new_school_name and new_school_name not in SCHOOL_LIST:
-                        # SCHOOL_LIST에 추가
-                        SCHOOL_LIST.append(new_school_name)
-                        STUDENT_COUNTS[new_school_name] = new_school_students
-                        # 업체에 배정
-                        if assign_vendor == "하영자원(본사)":
-                            DRIVER_ACCOUNTS['driver01']['schools'].append(new_school_name)
-                        elif assign_vendor in VENDOR_DATA:
-                            VENDOR_DATA[assign_vendor]['schools'].append(new_school_name)
-                        st.success(f"✅ '{new_school_name}' 등록 완료 → {assign_vendor}에 배정됨")
-                        st.rerun()
-                    elif new_school_name in SCHOOL_LIST:
-                        st.warning(f"⚠️ '{new_school_name}'은(는) 이미 등록된 학교입니다.")
-                    else:
-                        st.warning("학교명을 입력하세요.")
-                # 기존 미배정 학교를 업체에 배정
-                st.write("---")
-                st.markdown("**🔄 기존 학교 업체 재배정**")
-                all_assigned = []
-                for vn in all_vendor_names:
-                    all_assigned.extend(get_vendor_schools(vn))
-                unassigned = [s for s in SCHOOL_LIST if s not in all_assigned]
-                if unassigned:
-                    st.warning(f"미배정 학교: {', '.join(unassigned)}")
-                    sel_unassigned = st.selectbox("배정할 학교", unassigned, key="reassign_school")
-                    reassign_to = st.selectbox("배정 대상 업체", all_vendor_names, key="reassign_to")
-                    if st.button("🔄 배정", key="reassign_btn"):
-                        if reassign_to == "하영자원(본사)":
-                            DRIVER_ACCOUNTS['driver01']['schools'].append(sel_unassigned)
-                        else:
-                            VENDOR_DATA[reassign_to]['schools'].append(sel_unassigned)
-                        st.success(f"✅ {sel_unassigned} → {reassign_to} 배정 완료!")
-                        st.rerun()
-                else:
-                    st.success("✅ 모든 학교가 업체에 배정되어 있습니다.")
-
             elif sched_mode == "업체별 일정 확인":
-                st.markdown("#### 🔍 업체별 등록 일정 확인")
+                st.markdown("#### 🔍 업체별 등록 일정 확인 + 기사 지정")
                 sel_check_v = st.selectbox("업체 선택", all_vendor_names, key="check_vendor")
-                v_tabs = st.tabs(["📅 오늘 일정", "🗓️ 월별 일정"])
+                v_tabs = st.tabs(["📅 오늘 일정", "🗓️ 월별 일정", "👤 기사 지정"])
                 with v_tabs[0]:
                     today_sch = st.session_state.get(f'schedule_{sel_check_v}', get_vendor_schools(sel_check_v))
-                    if sel_check_v == '하영자원(본사)':
-                        drivers = [DRIVER_ACCOUNTS[d]['name'] for d in ['driver01','driver02','driver03']]
-                    else:
-                        drivers = [DRIVER_ACCOUNTS[d]['name'] for d in VENDOR_DATA.get(sel_check_v,{}).get('drivers',[]) if d in DRIVER_ACCOUNTS]
+                    drivers = get_vendor_drivers(sel_check_v)
                     st.markdown(f"**담당 기사:** {', '.join(drivers)}")
                     st.markdown(f"**오늘 수거 학교 ({len(today_sch)}곳):**")
                     for si, sch in enumerate(today_sch):
                         st.markdown(f"  {si+1}. 🏫 {sch}")
                 with v_tabs[1]:
-                    has_monthly = False
+                    render_monthly_schedule_view(sel_check_v, CURRENT_MONTH, show_delete=True, show_driver=True, key_suffix="admin_check")
+                with v_tabs[2]:
+                    st.markdown("**👤 월별 담당 기사 지정**")
+                    st.caption("각 월별 일정에 담당 기사를 지정하면, 기사 앱에 자동 배정됩니다.")
+                    drivers = get_vendor_drivers(sel_check_v)
                     for m in range(1, 13):
                         sk = f"monthly_sched_{sel_check_v}_{m}"
                         if sk in st.session_state:
-                            has_monthly = True
-                            sd = st.session_state[sk]
-                            with st.expander(f"📅 {m}월", expanded=(m==CURRENT_MONTH)):
-                                st.write(f"**수거 요일:** {', '.join(sd.get('요일',[]))}")
-                                st.write(f"**수거 품목:** {', '.join(sd.get('품목',[]))}")
-                                st.write(f"**대상 학교:** {', '.join(sd.get('학교',[]))}")
-                    if not has_monthly:
-                        st.info("등록된 월별 일정이 없습니다. '월별 일정 관리'에서 등록하세요.")
+                            dk = f"sched_driver_{sel_check_v}_{m}"
+                            current_driver = st.session_state.get(dk, "미지정")
+                            new_driver = st.selectbox(f"{m}월 담당 기사", ["미지정"] + drivers, 
+                                index=(["미지정"]+drivers).index(current_driver) if current_driver in ["미지정"]+drivers else 0,
+                                key=f"assign_driver_{sel_check_v}_{m}")
+                            if new_driver != current_driver:
+                                st.session_state[dk] = new_driver
 
         # ★ 올바로 보고서 탭 (수집운반업자용)
         if tab_allbaro is not None:
          with tab_allbaro:
             st.subheader("🔗 올바로시스템 실적보고서 (수집·운반업자용)")
             st.caption("폐기물관리법 제38조, 시행규칙 제60조 / 별지 제30호서식")
-            if not df_real.empty:
-                ab_years = sorted(df_real['년도'].unique(), reverse=True)
-                sel_ab_yr = st.selectbox("📅 년도 선택", ab_years, key="admin_ab_yr")
-                sel_ab_item = st.selectbox("📦 품목 선택", ["전체","음식물","사업장","재활용"], key="admin_ab_item")
-                # 미리보기
-                df_ab = df_real[df_real['년도']==str(sel_ab_yr)]
-                if sel_ab_item != "전체":
-                    item_col = {"음식물":"음식물(kg)","사업장":"사업장(kg)","재활용":"재활용(kg)"}.get(sel_ab_item)
-                    if item_col and item_col in df_ab.columns:
-                        df_ab = df_ab[df_ab[item_col] > 0]
-                ab_months = sorted(df_ab['월'].unique()) if not df_ab.empty else []
-                if ab_months:
-                    ab_mtabs = st.tabs(["📅 연간 요약"] + [f"🗓️ {m}월" for m in ab_months])
-                    with ab_mtabs[0]:
-                        ab_sum = df_ab[df_ab['수거여부']].groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index().sort_values('수거량',ascending=False)
-                        st.dataframe(ab_sum, use_container_width=True, hide_index=True)
-                        st.metric("총 수거량", f"{ab_sum['수거량'].sum():,.0f} kg")
-                    for mi, mm in enumerate(ab_months):
-                        with ab_mtabs[mi+1]:
-                            df_abm = df_ab[(df_ab['월']==mm) & (df_ab['수거여부'])]
-                            abm_s = df_abm.groupby('학교명').agg(수거량=('음식물(kg)','sum'),공급가=('공급가','sum')).reset_index()
-                            st.dataframe(abm_s, use_container_width=True, hide_index=True)
-                st.write("---")
-                st.download_button("📄 올바로 실적보고서 다운로드 (수집운반업자용)",
-                    data=create_allbaro_report(df_real, 'transporter', '하영자원', sel_ab_yr, sel_ab_item),
-                    file_name=f"올바로_수집운반_실적보고서_{sel_ab_yr}_{sel_ab_item}.xlsx", use_container_width=True)
-            else:
-                st.info("실제 수거 데이터가 없습니다.")
+            render_allbaro_download(df_real, 'transporter', '하영자원', 'admin_ab')
 
         # ★ 품목별 시세관리 탭
         if tab_price is not None:
@@ -1471,9 +1492,8 @@ else:
             mgmt_rows = []
             for vn in all_vendors:
                 if vn == "하영자원(본사)":
-                    v_sch = []; 
-                    for did in ['driver01','driver02','driver03']: v_sch.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
-                    v_drivers = 3; v_cars = 2
+                    v_sch = get_vendor_schools(vn)
+                    v_drivers = len(HEADQUARTER_DRIVERS); v_cars = 2
                     # 일반업장 수
                     v_biz = st.session_state.get(f'admin_biz_{vn}', [])
                 else:
@@ -1487,16 +1507,8 @@ else:
             st.markdown("#### 🏫🏢 업체별 거래처 관리 (학교/일반업장)")
             mgmt_vendor_sel = st.selectbox("업체 선택", all_vendors, key="mgmt_vendor_sel")
 
-            # --- 해당 업체의 학교/일반업장 목록 가져오기 ---
-            def _get_mgmt_schools(vn):
-                if vn == "하영자원(본사)":
-                    s = []
-                    for did in ['driver01','driver02','driver03']:
-                        s.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
-                    return s
-                return VENDOR_DATA.get(vn,{}).get('schools',[])
-
-            mgmt_schools = _get_mgmt_schools(mgmt_vendor_sel)
+            # --- 공통 함수 사용 ---
+            mgmt_schools = get_vendor_schools(mgmt_vendor_sel)
             mgmt_biz_key = f'admin_biz_{mgmt_vendor_sel}'
             if mgmt_biz_key not in st.session_state:
                 st.session_state[mgmt_biz_key] = []
@@ -1522,15 +1534,12 @@ else:
                         # 기존 미배정 학교 선택
                         all_assigned_sch = []
                         for vn_t in all_vendors:
-                            all_assigned_sch.extend(_get_mgmt_schools(vn_t))
+                            all_assigned_sch.extend(get_vendor_schools(vn_t))
                         unassigned_sch = [s for s in SCHOOL_LIST if s not in all_assigned_sch]
                         if unassigned_sch:
                             sel_add_sch = st.selectbox("미배정 학교 선택", unassigned_sch, key="mgmt_add_exist_sch")
                             if st.button("➕ 기존 학교 배정", type="primary", use_container_width=True, key="mgmt_add_exist_btn"):
-                                if mgmt_vendor_sel == "하영자원(본사)":
-                                    DRIVER_ACCOUNTS['driver01']['schools'].append(sel_add_sch)
-                                else:
-                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].append(sel_add_sch)
+                                add_school_to_vendor(mgmt_vendor_sel, sel_add_sch)
                                 st.success(f"✅ '{sel_add_sch}' → {mgmt_vendor_sel} 배정 완료!")
                                 st.rerun()
                         else:
@@ -1543,10 +1552,7 @@ else:
                             if new_sch_name and new_sch_name not in SCHOOL_LIST:
                                 SCHOOL_LIST.append(new_sch_name)
                                 STUDENT_COUNTS[new_sch_name] = new_sch_students
-                                if mgmt_vendor_sel == "하영자원(본사)":
-                                    DRIVER_ACCOUNTS['driver01']['schools'].append(new_sch_name)
-                                else:
-                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].append(new_sch_name)
+                                add_school_to_vendor(mgmt_vendor_sel, new_sch_name)
                                 st.success(f"✅ '{new_sch_name}'({new_sch_students}명) 신규 등록 → {mgmt_vendor_sel} 배정!")
                                 st.rerun()
                             elif new_sch_name in SCHOOL_LIST:
@@ -1559,20 +1565,8 @@ else:
                         move_sch = st.selectbox("이동할 학교", mgmt_schools, key="mgmt_move_sch")
                         move_to = st.selectbox("이동 대상 업체", [v for v in all_vendors if v != mgmt_vendor_sel], key="mgmt_move_to")
                         if st.button("🔄 재배정", type="primary", use_container_width=True, key="mgmt_move_btn"):
-                            # 기존 업체에서 제거
-                            if mgmt_vendor_sel == "하영자원(본사)":
-                                for did in ['driver01','driver02','driver03']:
-                                    if move_sch in DRIVER_ACCOUNTS[did].get('schools',[]):
-                                        DRIVER_ACCOUNTS[did]['schools'].remove(move_sch)
-                                        break
-                            else:
-                                if move_sch in VENDOR_DATA[mgmt_vendor_sel]['schools']:
-                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].remove(move_sch)
-                            # 새 업체에 추가
-                            if move_to == "하영자원(본사)":
-                                DRIVER_ACCOUNTS['driver01']['schools'].append(move_sch)
-                            else:
-                                VENDOR_DATA[move_to]['schools'].append(move_sch)
+                            remove_school_from_vendor(mgmt_vendor_sel, move_sch)
+                            add_school_to_vendor(move_to, move_sch)
                             st.success(f"✅ '{move_sch}' : {mgmt_vendor_sel} → {move_to} 재배정 완료!")
                             st.rerun()
                     else:
@@ -1583,14 +1577,7 @@ else:
                         del_sch = st.selectbox("제거할 학교", mgmt_schools, key="mgmt_del_sch")
                         st.caption(f"⚠️ '{del_sch}'을(를) {mgmt_vendor_sel} 담당에서 제거합니다. (학교 자체는 삭제되지 않고 미배정 상태가 됩니다)")
                         if st.button("🗑️ 거래처 제거", type="primary", use_container_width=True, key="mgmt_del_sch_btn"):
-                            if mgmt_vendor_sel == "하영자원(본사)":
-                                for did in ['driver01','driver02','driver03']:
-                                    if del_sch in DRIVER_ACCOUNTS[did].get('schools',[]):
-                                        DRIVER_ACCOUNTS[did]['schools'].remove(del_sch)
-                                        break
-                            else:
-                                if del_sch in VENDOR_DATA[mgmt_vendor_sel]['schools']:
-                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].remove(del_sch)
+                            remove_school_from_vendor(mgmt_vendor_sel, del_sch)
                             st.success(f"✅ '{del_sch}' 제거 완료! (미배정 상태)")
                             st.rerun()
                     else:
@@ -1667,11 +1654,7 @@ else:
                     st.markdown(f"**{ilabel} 품목 업체별 현황**")
                     if not df_real.empty and icol in df_real.columns:
                         for vn in all_vendors:
-                            if vn == "하영자원(본사)":
-                                v_sch = []; 
-                                for did in ['driver01','driver02','driver03']: v_sch.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
-                            else:
-                                v_sch = VENDOR_DATA[vn]['schools']
+                            v_sch = get_vendor_schools(vn)
                             df_vn = df_real[(df_real['학교명'].isin(v_sch)) & (df_real['수거여부'])]
                             total = df_vn[icol].sum() if not df_vn.empty else 0
                             if total > 0:
@@ -1681,29 +1664,24 @@ else:
                     else:
                         st.info(f"{ilabel} 수거 데이터가 없습니다.")
 
-        if tab_map is not None:
-         with tab_map:
-            st.write("📍 **수거 차량 실시간 GPS 관제**")
-            st.map(pd.DataFrame({'lat':[37.20,37.25],'lon':[127.05,127.10]}))
-        if tab_sub is not None:
-         with tab_sub:
-            st.subheader("🤝 외주 수거업체 관리")
+            # ★ 안전평가 + 계약현황 (기존 외주업체 탭에서 통합)
+            st.write("---")
+            st.markdown("#### 🤝 외주업체 안전평가 · 계약관리")
             # 계약 갱신 알림
             from datetime import datetime as dt_cls
             for vn, vd in VENDOR_DATA.items():
-                exp = dt_cls.strptime(vd['계약만료'],'%Y-%m-%d')
-                days_left = (exp - dt_cls.now()).days
-                if days_left <= 90:
-                    st.markdown(f'<div class="alert-box">🔔 <b>[계약 갱신]</b> \'{vn}\' 업체와의 수거 위탁 계약 만료가 {days_left}일 앞으로 다가왔습니다. (만료일: {vd["계약만료"]})</div>', unsafe_allow_html=True)
-            # 우수/주의/경고 카드
+                try:
+                    exp = dt_cls.strptime(vd['계약만료'],'%Y-%m-%d')
+                    days_left = (exp - dt_cls.now()).days
+                    if days_left <= 90:
+                        st.markdown(f'<div class="alert-box">🔔 <b>[계약 갱신]</b> \'{vn}\' 계약 만료 {days_left}일 전 (만료일: {vd["계약만료"]})</div>', unsafe_allow_html=True)
+                except: pass
+            # 업체 총괄 + 안전평가
             sorted_vendors = sorted(VENDOR_DATA.items(), key=lambda x: x[1]['안전점수'], reverse=True)
-            vc1, vc2, vc3 = st.columns(3)
-            with vc1: st.success(f"🏆 우수: **{sorted_vendors[0][0]}** ({sorted_vendors[0][1]['안전점수']}점)")
-            worst = sorted_vendors[-1]
-            with vc2: st.warning(f"⚠️ 주의: **{worst[0]}** ({worst[1]['안전점수']}점)")
-            with vc3: st.info(f"✅ 스쿨존 위반: **1건**")
-
-            # 업체 총괄 테이블
+            if sorted_vendors:
+                vc1, vc2 = st.columns(2)
+                with vc1: st.success(f"🏆 우수: **{sorted_vendors[0][0]}** ({sorted_vendors[0][1]['안전점수']}점)")
+                with vc2: st.warning(f"⚠️ 주의: **{sorted_vendors[-1][0]}** ({sorted_vendors[-1][1]['안전점수']}점)")
             vendor_rows = []
             for vn, vd in VENDOR_DATA.items():
                 v_schools = vd['schools']
@@ -1714,289 +1692,118 @@ else:
                     v_total = 0
                 penalty = -50000 if vd['안전점수'] < 90 else 0
                 vendor_rows.append({
-                    '외주업체명':vn, '담당학교':'/'.join(v_schools[:2])+'...' if len(v_schools)>2 else '/'.join(v_schools),
-                    '안전평가점수':f"{vd['안전점수']}점 ({'우수' if vd['안전점수']>=90 else '주의'})",
-                    '안전 페널티':f"{penalty:,} 원" if penalty else "0 원",
-                    '정산예상액':f"{max(0,v_total+penalty):,.0f} 원",
-                    '운행상태':vd['상태'],
+                    '외주업체명':vn, '담당학교':len(v_schools),
+                    '안전점수':f"{vd['안전점수']}점",
+                    '페널티':f"{penalty:,}원" if penalty else "없음",
+                    '정산예상액':f"{max(0,v_total+penalty):,.0f}원",
+                    '상태':vd['상태'], '계약만료':vd['계약만료']
                 })
             st.dataframe(pd.DataFrame(vendor_rows), use_container_width=True, hide_index=True)
-
-            # ★ 안전평가 결과서 + 청구서 (업체 선택 방식)
-            st.write("---")
-            st.markdown("**📋 안전평가 / 💰 청구서 다운로드**")
-            sel_v = st.selectbox("업체 선택", list(VENDOR_DATA.keys()), key="admin_vendor_sel_simple")
-            vinfo = VENDOR_DATA[sel_v]
-
-            # 안전평가 함수 정의 (탭 밖에서)
-            def create_safety_report_excel(vendor_name, vdata):
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    wb = writer.book
-                    title_fmt = wb.add_format({'bold':True,'font_size':16,'align':'center','font_color':'#c62828'})
-                    header_fmt = wb.add_format({'bold':True,'font_size':10,'align':'center','bg_color':'#1565c0','font_color':'white','border':1,'text_wrap':True})
-                    cell_c = wb.add_format({'font_size':10,'align':'center','border':1,'text_wrap':True,'valign':'vcenter'})
-                    cell_l = wb.add_format({'font_size':10,'align':'left','border':1,'text_wrap':True,'valign':'vcenter'})
-                    pass_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'bg_color':'#e8f5e9','font_color':'#2e7d32'})
-                    warn_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'bg_color':'#fff3e0','font_color':'#e65100'})
-                    section_fmt = wb.add_format({'bold':True,'font_size':11,'bg_color':'#e3f2fd','border':1})
-                    ws = wb.add_worksheet('안전평가 결과서')
-                    ws.set_column(0,0,5); ws.set_column(1,1,18); ws.set_column(2,2,35); ws.set_column(3,3,12); ws.set_column(4,4,12); ws.set_column(5,5,20)
-                    ws.merge_range('A1:F1', '외주 수거업체 안전평가 결과서', title_fmt)
-                    ws.merge_range('A2:F2', f'평가대상: {vendor_name} | 평가일: {CURRENT_DATE} | 평가자: 하영자원 안전관리팀', wb.add_format({'font_size':10,'align':'center','border':0}))
-                    # 업체 기본정보
-                    ws.merge_range('A4:F4', '▣ 업체 기본정보', section_fmt)
-                    info_items = [['업체명',vendor_name],['대표자',vdata['대표']],['사업자번호',vdata['사업자번호']],
-                                  ['연락처',vdata['연락처']],['차량번호',', '.join(vdata['차량'])],['계약만료일',vdata['계약만료']]]
-                    for ri, row in enumerate(info_items):
-                        ws.write(5+ri, 0, '', cell_c); ws.write(5+ri, 1, row[0], cell_c); ws.merge_range(5+ri, 2, 5+ri, 5, row[1], cell_l)
-                    # 평가항목 (환경부 기준 + 학교 스쿨존)
-                    r = 12
-                    ws.merge_range(f'A{r}:F{r}', '▣ 안전평가 점검 항목 (100점 만점)', section_fmt)
-                    r += 1
-                    eval_headers = ['No','평가영역','점검항목','배점','평가점수','비고']
-                    for ci, h in enumerate(eval_headers): ws.write(r, ci, h, header_fmt)
-                    score = vdata['안전점수']
-                    is_good = score >= 90
-                    eval_items = [
-                        ['1','차량 안전성\n(30점)','차량 정기검사 이행 여부','10','10' if is_good else '8',''],
-                        ['2','','후방카메라·측면센서 장착 상태','10','10' if is_good else '7',''],
-                        ['3','','소화기·안전삼각대 비치','10','10' if is_good else '10',''],
-                        ['4','스쿨존 준수\n(30점)','스쿨존 30km/h 이하 운행','15','15' if is_good else '10','위반 시 -5점/건'],
-                        ['5','','학교 출입 시 안전요원 동승','15','15' if is_good else '12',''],
-                        ['6','기사 안전교육\n(20점)','산업안전보건교육 이수','10','10' if is_good else '8','연 2회 이상'],
-                        ['7','','음식물폐기물 취급 교육','10','10' if is_good else '10',''],
-                        ['8','환경 관리\n(10점)','수거 시 악취·오수 관리','5','5' if is_good else '5',''],
-                        ['9','','폐수 적정 처리 여부','5','5' if is_good else '5',''],
-                        ['10','행정 신뢰성\n(10점)','올바로시스템 전자인계서 적시 전송','5','5' if is_good else '5',''],
-                        ['11','','월별 실적보고서 기한 내 제출','5','3' if is_good else '5',''],
-                    ]
-                    for ri, row in enumerate(eval_items):
-                        r2 = r + 1 + ri
-                        for ci, val in enumerate(row):
-                            fmt = cell_c if ci != 2 else cell_l
-                            if ci == 4: fmt = pass_fmt if int(val) >= int(eval_items[ri][3]) else warn_fmt
-                            ws.write(r2, ci, val, fmt)
-                    # 총점
-                    total_r = r + 1 + len(eval_items)
-                    ws.merge_range(total_r, 0, total_r, 3, '총점', wb.add_format({'bold':True,'font_size':12,'align':'center','border':1,'bg_color':'#1565c0','font_color':'white'}))
-                    total_score = sum(int(x[4]) for x in eval_items)
-                    grade = '우수(A)' if total_score >= 90 else '양호(B)' if total_score >= 80 else '주의(C)'
-                    ws.write(total_r, 4, str(total_score), wb.add_format({'bold':True,'font_size':14,'align':'center','border':1,'font_color':'#c62828'}))
-                    ws.write(total_r, 5, grade, wb.add_format({'bold':True,'font_size':12,'align':'center','border':1}))
-                return output.getvalue()
-            ac1, ac2 = st.columns(2)
-            with ac1:
+            # 안전평가 다운로드 + 계약현황
+            mgmt_sub = st.tabs(["📋 안전평가 다운로드","📋 계약현황","🔍 거래처 상세 조회"])
+            with mgmt_sub[0]:
+                sel_v = st.selectbox("업체 선택", list(VENDOR_DATA.keys()), key="mgmt_safety_vendor")
+                def create_safety_report_excel(vendor_name, vdata):
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        wb = writer.book
+                        title_fmt = wb.add_format({'bold':True,'font_size':16,'align':'center','font_color':'#c62828'})
+                        header_fmt = wb.add_format({'bold':True,'font_size':10,'align':'center','bg_color':'#1565c0','font_color':'white','border':1,'text_wrap':True})
+                        cell_c = wb.add_format({'font_size':10,'align':'center','border':1,'text_wrap':True,'valign':'vcenter'})
+                        cell_l = wb.add_format({'font_size':10,'align':'left','border':1,'text_wrap':True,'valign':'vcenter'})
+                        pass_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'bg_color':'#e8f5e9','font_color':'#2e7d32'})
+                        warn_fmt = wb.add_format({'font_size':10,'align':'center','border':1,'bg_color':'#fff3e0','font_color':'#e65100'})
+                        section_fmt = wb.add_format({'bold':True,'font_size':11,'bg_color':'#e3f2fd','border':1})
+                        ws = wb.add_worksheet('안전평가 결과서')
+                        ws.set_column(0,0,5); ws.set_column(1,1,18); ws.set_column(2,2,35); ws.set_column(3,3,12); ws.set_column(4,4,12); ws.set_column(5,5,20)
+                        ws.merge_range('A1:F1', '외주 수거업체 안전평가 결과서', title_fmt)
+                        ws.merge_range('A2:F2', f'평가대상: {vendor_name} | 평가일: {CURRENT_DATE} | 평가자: 하영자원 안전관리팀', wb.add_format({'font_size':10,'align':'center','border':0}))
+                        ws.merge_range('A4:F4', '▣ 업체 기본정보', section_fmt)
+                        info_items = [['업체명',vendor_name],['대표자',vdata['대표']],['사업자번호',vdata['사업자번호']],
+                                      ['연락처',vdata['연락처']],['차량번호',', '.join(vdata['차량'])],['계약만료일',vdata['계약만료']]]
+                        for ri, row in enumerate(info_items):
+                            ws.write(5+ri, 0, '', cell_c); ws.write(5+ri, 1, row[0], cell_c); ws.merge_range(5+ri, 2, 5+ri, 5, row[1], cell_l)
+                        r = 12
+                        ws.merge_range(f'A{r}:F{r}', '▣ 안전평가 점검 항목 (100점 만점)', section_fmt)
+                        r += 1
+                        for ci, h in enumerate(['No','평가영역','점검항목','배점','평가점수','비고']): ws.write(r, ci, h, header_fmt)
+                        score = vdata['안전점수']; is_good = score >= 90
+                        eval_items = [
+                            ['1','차량 안전성\n(30점)','차량 정기검사 이행 여부','10','10' if is_good else '8',''],
+                            ['2','','후방카메라·측면센서 장착 상태','10','10' if is_good else '7',''],
+                            ['3','','소화기·안전삼각대 비치','10','10' if is_good else '10',''],
+                            ['4','스쿨존 준수\n(30점)','스쿨존 30km/h 이하 운행','15','15' if is_good else '10','위반 시 -5점/건'],
+                            ['5','','학교 출입 시 안전요원 동승','15','15' if is_good else '12',''],
+                            ['6','기사 안전교육\n(20점)','산업안전보건교육 이수','10','10' if is_good else '8','연 2회 이상'],
+                            ['7','','음식물폐기물 취급 교육','10','10' if is_good else '10',''],
+                            ['8','환경 관리\n(10점)','수거 시 악취·오수 관리','5','5' if is_good else '5',''],
+                            ['9','','폐수 적정 처리 여부','5','5' if is_good else '5',''],
+                            ['10','행정 신뢰성\n(10점)','올바로시스템 전자인계서 적시 전송','5','5' if is_good else '5',''],
+                            ['11','','월별 실적보고서 기한 내 제출','5','3' if is_good else '5',''],
+                        ]
+                        for ri, row in enumerate(eval_items):
+                            r2 = r + 1 + ri
+                            for ci, val in enumerate(row):
+                                fmt = cell_c if ci != 2 else cell_l
+                                if ci == 4: fmt = pass_fmt if int(val) >= int(eval_items[ri][3]) else warn_fmt
+                                ws.write(r2, ci, val, fmt)
+                        total_r = r + 1 + len(eval_items)
+                        ws.merge_range(total_r, 0, total_r, 3, '총점', wb.add_format({'bold':True,'font_size':12,'align':'center','border':1,'bg_color':'#1565c0','font_color':'white'}))
+                        total_score = sum(int(x[4]) for x in eval_items)
+                        grade = '우수(A)' if total_score >= 90 else '양호(B)' if total_score >= 80 else '주의(C)'
+                        ws.write(total_r, 4, str(total_score), wb.add_format({'bold':True,'font_size':14,'align':'center','border':1,'font_color':'#c62828'}))
+                        ws.write(total_r, 5, grade, wb.add_format({'bold':True,'font_size':12,'align':'center','border':1}))
+                    return output.getvalue()
                 st.download_button("📋 안전평가 결과서 다운로드", data=create_safety_report_excel(sel_v, VENDOR_DATA[sel_v]),
                                    file_name=f"{sel_v}_안전평가결과서_{CURRENT_DATE}.xlsx", use_container_width=True)
-            with ac2:
-                st.caption(f"※ 외주업체 상세 관리는 해당 업체 관리자 모드에서 확인하세요.")
-            # ★ 계약현황 하위시트
-            st.write("---")
-            st.subheader("📋 업체별 계약현황")
-            if 'contract_data' not in st.session_state:
-                st.session_state['contract_data'] = load_contracts_from_db()
-            sel_cv = st.selectbox("업체 선택", list(st.session_state['contract_data'].keys()), key="ct_vendor_sel")
-            cv_data = st.session_state['contract_data'][sel_cv]
-            st.markdown(f'<div style="background:linear-gradient(135deg,#34a853,#4caf50);padding:12px;border-radius:10px;color:white;"><b>{sel_cv}</b> | 대표: {cv_data["대표"]} | 계약: {cv_data["계약시작"]}~{cv_data["계약만료"]} | {cv_data["상태"]}</div>', unsafe_allow_html=True)
-            ct_sub1, ct_sub2 = st.tabs(["💰 품목별 계약단가","✏️ 수정/추가"])
-            with ct_sub1:
+            with mgmt_sub[1]:
+                if 'contract_data' not in st.session_state:
+                    st.session_state['contract_data'] = load_contracts_from_db()
+                sel_cv = st.selectbox("업체 선택", list(st.session_state['contract_data'].keys()), key="ct_vendor_sel")
+                cv_data = st.session_state['contract_data'][sel_cv]
+                st.markdown(f'<div style="background:linear-gradient(135deg,#34a853,#4caf50);padding:12px;border-radius:10px;color:white;"><b>{sel_cv}</b> | 대표: {cv_data["대표"]} | 계약: {cv_data["계약시작"]}~{cv_data["계약만료"]} | {cv_data["상태"]}</div>', unsafe_allow_html=True)
                 ct_rows = [{"품목":k,"계약단가(원/kg)":v} for k,v in cv_data["품목단가"].items()]
                 st.dataframe(pd.DataFrame(ct_rows), use_container_width=True, hide_index=True)
-            with ct_sub2:
-                sel_ct_item = st.selectbox("품목", list(cv_data["품목단가"].keys()), key="ct_edit_item")
-                new_ct_p = st.number_input("새 단가", value=cv_data["품목단가"][sel_ct_item], step=10, key="ct_new_price")
-                if st.button("💾 수정", key="ct_save"):
-                    st.session_state['contract_data'][sel_cv]["품목단가"][sel_ct_item] = new_ct_p
-                    save_contract_price(sel_cv, sel_ct_item, new_ct_p)
-                    st.success(f"✅ {sel_cv} - {sel_ct_item} → {new_ct_p:,}원 (DB 영구 반영)"); st.rerun()
                 st.write("---")
-                new_ct_name = st.text_input("신규 품목명", key="ct_new_name")
-                new_ct_val = st.number_input("단가", value=150, step=10, key="ct_new_p")
-                if st.button("➕ 추가", key="ct_add"):
+                sel_ct_item = st.selectbox("품목", list(cv_data["품목단가"].keys()), key="ct_edit_item")
+                new_ct_price = st.number_input("새 계약단가(원/kg)", value=cv_data["품목단가"][sel_ct_item], step=10, key="ct_new_price")
+                if st.button("💾 계약단가 저장", type="primary", use_container_width=True, key="ct_save"):
+                    st.session_state['contract_data'][sel_cv]["품목단가"][sel_ct_item] = new_ct_price
+                    save_contract_price(sel_cv, sel_ct_item, new_ct_price)
+                    st.success(f"✅ {sel_cv} '{sel_ct_item}' → {new_ct_price:,}원 저장!"); st.rerun()
+                new_ct_name = st.text_input("신규 품목명", key="ct_new_item")
+                new_ct_val = st.number_input("단가(원/kg)", value=0, step=10, key="ct_new_val")
+                if st.button("➕ 추가", type="primary", use_container_width=True, key="ct_add"):
                     if new_ct_name:
                         st.session_state['contract_data'][sel_cv]["품목단가"][new_ct_name] = new_ct_val
                         save_contract_price(sel_cv, new_ct_name, new_ct_val)
-                        st.success(f"✅ 추가! (DB 영구 반영)"); st.rerun()
-
-            # ★ [신규] 외주업체별 수거일정 관리 (월별/일별 + 기사 지정)
-            st.write("---")
-            st.subheader("📅 외주업체별 수거일정 관리")
-            sel_sched_v = st.selectbox("업체 선택", list(VENDOR_DATA.keys()), key="sub_sched_vendor")
-            sv_data = VENDOR_DATA[sel_sched_v]
-            sv_schools = sv_data['schools']
-            sv_driver_ids = sv_data.get('drivers', [])
-            sv_drivers = {did: DRIVER_ACCOUNTS[did]['name'] for did in sv_driver_ids if did in DRIVER_ACCOUNTS}
-
-            sched_sub_tabs = st.tabs(["📅 월별 일정 현황","📋 일별 일정 현황","✏️ 일정 등록/수정","🗑️ 일정 삭제","🚚 기사 지정"])
-
-            # --- 탭1: 월별 일정 현황 ---
-            with sched_sub_tabs[0]:
-                st.markdown(f"**{sel_sched_v} 월별 수거일정 현황**")
-                has_monthly = False
-                for m in range(1, 13):
-                    sk = f"monthly_sched_{sel_sched_v}_{m}"
-                    if sk in st.session_state:
-                        has_monthly = True
-                        sd = st.session_state[sk]
-                        # 기사 배정 정보
-                        driver_key = f"sched_driver_{sel_sched_v}_{m}"
-                        assigned_driver = st.session_state.get(driver_key, "미지정")
-                        with st.expander(f"📅 {m}월 | {', '.join(sd.get('요일',[]))} | 기사: {assigned_driver}", expanded=(m==CURRENT_MONTH)):
-                            sc1, sc2, sc3 = st.columns(3)
-                            with sc1: st.write(f"**수거 요일:** {', '.join(sd.get('요일',[]))}")
-                            with sc2: st.write(f"**수거 품목:** {', '.join(sd.get('품목',[]))}")
-                            with sc3: st.write(f"**담당 기사:** {assigned_driver}")
-                            st.write(f"**대상 학교 ({len(sd.get('학교',[]))}):** {', '.join(sd.get('학교',[]))}")
-                if not has_monthly:
-                    st.info(f"{sel_sched_v}에 등록된 월별 일정이 없습니다. '✏️ 일정 등록/수정' 탭에서 등록하세요.")
-
-            # --- 탭2: 일별 일정 현황 ---
-            with sched_sub_tabs[1]:
-                st.markdown(f"**{sel_sched_v} 일별 수거일정**")
-                # 오늘 일정
-                today_key = f'schedule_{sel_sched_v}'
-                today_sch = st.session_state.get(today_key, sv_schools)
-                st.markdown(f"**📅 오늘 ({CURRENT_DATE}) 수거 학교:**")
-                if today_sch:
-                    for si, s in enumerate(today_sch):
-                        driver_for_sch = "미지정"
-                        for did, dinfo in DRIVER_ACCOUNTS.items():
-                            if did in sv_driver_ids and s in dinfo.get('schools',[]):
-                                driver_for_sch = dinfo['name']; break
-                        st.markdown(f"  {si+1}. 🏫 {s} → 🚚 {driver_for_sch}")
-                else:
-                    st.info("오늘 배정된 수거 학교가 없습니다.")
-                # 수거예정일 개별 등록 내역
-                planned_key = f'planned_schedules'
-                if st.session_state.get(planned_key):
-                    vendor_planned = [p for p in st.session_state[planned_key] if p.get('업체')==sel_sched_v]
-                    if vendor_planned:
-                        st.write("---")
-                        st.markdown(f"**📋 등록된 수거예정일 ({len(vendor_planned)}건)**")
-                        st.dataframe(pd.DataFrame(vendor_planned), use_container_width=True, hide_index=True)
-
-            # --- 탭3: 일정 등록/수정 ---
-            with sched_sub_tabs[2]:
-                st.markdown(f"**✏️ {sel_sched_v} 수거일정 등록/수정**")
-                sub_reg_tabs = st.tabs(["🗓️ 월별 정기 일정","📋 오늘 일정 수정","📅 수거예정일 등록"])
-                # 월별 정기 일정
-                with sub_reg_tabs[0]:
-                    sub_sm = st.selectbox("월 선택", list(range(1,13)), format_func=lambda x: f"{x}월", key="sub_sched_m")
-                    sk_ex = st.session_state.get(f"monthly_sched_{sel_sched_v}_{sub_sm}", {"요일":['월','수','금'], "학교":sv_schools, "품목":['음식물']})
-                    sub_days = st.multiselect("수거 요일", ['월','화','수','목','금'], default=sk_ex.get('요일',['월','수','금']), key=f"sub_sd_{sel_sched_v}_{sub_sm}")
-                    sub_items = st.multiselect("수거 품목", ['음식물','사업장','재활용'], default=sk_ex.get('품목',['음식물']), key=f"sub_si_{sel_sched_v}_{sub_sm}")
-                    sub_schools = st.multiselect("대상 학교", sv_schools, default=[s for s in sk_ex.get('학교',sv_schools) if s in sv_schools], key=f"sub_ss_{sel_sched_v}_{sub_sm}")
-                    # 기사 지정
-                    driver_opts = ["미지정"] + [f"{did} ({dname})" for did, dname in sv_drivers.items()]
-                    cur_driver_key = f"sched_driver_{sel_sched_v}_{sub_sm}"
-                    cur_driver = st.session_state.get(cur_driver_key, "미지정")
-                    sub_driver = st.selectbox("담당 기사", driver_opts, index=0, key=f"sub_drv_{sel_sched_v}_{sub_sm}")
-                    if st.button("💾 월별 일정 저장", type="primary", use_container_width=True, key=f"sub_save_m_{sel_sched_v}"):
-                        st.session_state[f"monthly_sched_{sel_sched_v}_{sub_sm}"] = {"요일":sub_days, "학교":sub_schools, "품목":sub_items}
-                        # 기사 지정 저장
-                        driver_val = sub_driver if sub_driver != "미지정" else "미지정"
-                        if driver_val != "미지정":
-                            driver_val = sub_driver.split(" (")[1].rstrip(")") if " (" in sub_driver else sub_driver
-                        st.session_state[cur_driver_key] = driver_val
-                        st.success(f"✅ {sel_sched_v} {sub_sm}월 일정 저장! (기사: {driver_val})")
-                        st.rerun()
-                # 오늘 일정 수정
-                with sub_reg_tabs[1]:
-                    st.markdown(f"**{sel_sched_v} 오늘 수거 학교 수정**")
-                    today_key_edit = f'schedule_{sel_sched_v}'
-                    cur_today = st.session_state.get(today_key_edit, sv_schools)
-                    new_today = st.multiselect("오늘 수거 학교", sv_schools, default=[s for s in cur_today if s in sv_schools], key=f"sub_today_{sel_sched_v}")
-                    if st.button("💾 오늘 일정 저장", type="primary", use_container_width=True, key=f"sub_save_today_{sel_sched_v}"):
-                        st.session_state[today_key_edit] = new_today
-                        st.success(f"✅ {sel_sched_v} 오늘 일정 업데이트! ({len(new_today)}개교)")
-                        st.rerun()
-                # 수거예정일 개별 등록
-                with sub_reg_tabs[2]:
-                    sub_sp_sch = st.selectbox("거래처", sv_schools if sv_schools else ["없음"], key=f"sub_sp_sch_{sel_sched_v}")
-                    sub_sp_item = st.selectbox("품목", ['음식물','사업장','재활용'], key=f"sub_sp_item_{sel_sched_v}")
-                    sub_sp_date = st.date_input("수거 예정일", key=f"sub_sp_date_{sel_sched_v}")
-                    sub_sp_driver = st.selectbox("담당 기사", ["미지정"] + list(sv_drivers.values()), key=f"sub_sp_drv_{sel_sched_v}")
-                    if st.button("📅 예정일 등록", type="primary", use_container_width=True, key=f"sub_sp_save_{sel_sched_v}"):
-                        pk = 'planned_schedules'
-                        if pk not in st.session_state: st.session_state[pk] = []
-                        st.session_state[pk].append({"업체":sel_sched_v,"학교":sub_sp_sch,"품목":sub_sp_item,"날짜":str(sub_sp_date),"기사":sub_sp_driver})
-                        st.success(f"✅ {sel_sched_v} → {sub_sp_sch} ({sub_sp_item}) {sub_sp_date} 등록!")
-
-            # --- 탭4: 일정 삭제 ---
-            with sched_sub_tabs[3]:
-                st.markdown(f"**🗑️ {sel_sched_v} 수거일정 삭제**")
-                del_type = st.radio("삭제 유형", ["월별 정기 일정 삭제","수거예정일 삭제"], horizontal=True, key="sub_del_type")
-                if del_type == "월별 정기 일정 삭제":
-                    existing_months = []
-                    for m in range(1,13):
-                        if f"monthly_sched_{sel_sched_v}_{m}" in st.session_state:
-                            existing_months.append(m)
-                    if existing_months:
-                        del_m = st.selectbox("삭제할 월", existing_months, format_func=lambda x: f"{x}월", key="sub_del_m")
-                        st.caption(f"⚠️ {sel_sched_v}의 {del_m}월 수거일정이 완전히 삭제됩니다.")
-                        if st.button(f"🗑️ {del_m}월 일정 삭제", type="primary", use_container_width=True, key="sub_del_m_btn"):
-                            del st.session_state[f"monthly_sched_{sel_sched_v}_{del_m}"]
-                            # 기사 지정도 삭제
-                            dk = f"sched_driver_{sel_sched_v}_{del_m}"
-                            if dk in st.session_state: del st.session_state[dk]
-                            st.success(f"✅ {sel_sched_v} {del_m}월 일정 삭제 완료!")
-                            st.rerun()
+                        st.success(f"✅ 추가!"); st.rerun()
+            # ★ Q4: 외주업체 거래처 상세 조회 (읽기 전용)
+            with mgmt_sub[2]:
+                st.markdown("**🔍 외주업체 거래처 상세정보 (읽기 전용)**")
+                st.caption("외주업체가 등록한 거래처 정보를 조회합니다. 수정은 해당 업체 관리자 모드에서만 가능합니다.")
+                view_vendor = st.selectbox("업체 선택", list(VENDOR_DATA.keys()), key="mgmt_view_cust_vendor")
+                va_detail_key = f"va_cust_detail_{view_vendor}"
+                if va_detail_key in st.session_state:
+                    cust_detail = st.session_state[va_detail_key]
+                    if cust_detail:
+                        rows_view = [{"No":i+1,"구분":v.get("구분","학교"),"상호":k,"사업자번호":v.get("사업자번호",""),"대표자":v.get("대표자",""),"업태":v.get("업태",""),"이메일":v.get("이메일","")} for i,(k,v) in enumerate(cust_detail.items())]
+                        st.dataframe(pd.DataFrame(rows_view), use_container_width=True, hide_index=True)
                     else:
-                        st.info("삭제할 월별 일정이 없습니다.")
+                        st.info("등록된 거래처 정보가 없습니다.")
                 else:
-                    pk = 'planned_schedules'
-                    vendor_planned = [p for p in st.session_state.get(pk,[]) if p.get('업체')==sel_sched_v]
-                    if vendor_planned:
-                        del_labels = [f"{p['날짜']} | {p['학교']} | {p['품목']}" for p in vendor_planned]
-                        del_sel = st.selectbox("삭제할 예정일", del_labels, key="sub_del_planned")
-                        if st.button("🗑️ 예정일 삭제", type="primary", use_container_width=True, key="sub_del_p_btn"):
-                            idx = del_labels.index(del_sel)
-                            # 전체 목록에서 해당 건 제거
-                            target = vendor_planned[idx]
-                            st.session_state[pk] = [p for p in st.session_state[pk] if not (p.get('업체')==target.get('업체') and p.get('날짜')==target.get('날짜') and p.get('학교')==target.get('학교'))]
-                            st.success(f"✅ 삭제 완료!")
-                            st.rerun()
+                    # DB에서 로드 시도
+                    db_custs = load_customers_from_db(view_vendor)
+                    if db_custs:
+                        rows_view = [{"No":i+1,"구분":v.get("구분","학교"),"상호":k,"사업자번호":v.get("사업자번호",""),"대표자":v.get("대표자","")} for i,(k,v) in enumerate(db_custs.items())]
+                        st.dataframe(pd.DataFrame(rows_view), use_container_width=True, hide_index=True)
                     else:
-                        st.info("삭제할 수거예정일이 없습니다.")
+                        st.info(f"{view_vendor}의 거래처 상세정보가 아직 등록되지 않았습니다. 해당 업체 관리자 모드에서 등록 후 조회 가능합니다.")
 
-            # --- 탭5: 기사 지정 관리 ---
-            with sched_sub_tabs[4]:
-                st.markdown(f"**🚚 {sel_sched_v} 수거기사 배정 관리**")
-                st.caption("기사별 담당 학교를 변경하면 기사 앱 일정에 실시간 반영됩니다.")
-                if sv_drivers:
-                    for did, dname in sv_drivers.items():
-                        dinfo = DRIVER_ACCOUNTS[did]
-                        cur_sch = dinfo.get('schools', [])
-                        with st.expander(f"🚚 {dname} (ID: {did}) - 담당 {len(cur_sch)}개교", expanded=True):
-                            # 현재 담당 학교 표시
-                            if cur_sch:
-                                st.write(f"현재 담당: {', '.join(cur_sch)}")
-                            else:
-                                st.info("담당 학교 없음")
-                            # 학교 재배정
-                            new_assignment = st.multiselect(
-                                f"{dname} 담당 학교 수정",
-                                sv_schools,
-                                default=[s for s in cur_sch if s in sv_schools],
-                                key=f"sub_driver_assign_{did}"
-                            )
-                            if st.button(f"💾 {dname} 배정 저장", use_container_width=True, key=f"sub_driver_save_{did}"):
-                                DRIVER_ACCOUNTS[did]['schools'] = new_assignment
-                                st.success(f"✅ {dname} → {len(new_assignment)}개교 배정 완료! (기사 앱 즉시 반영)")
-                                st.rerun()
-                else:
-                    st.info(f"{sel_sched_v}에 등록된 기사가 없습니다.")
-                # 미배정 학교 확인
-                all_assigned_drv = []
-                for did in sv_driver_ids:
-                    if did in DRIVER_ACCOUNTS:
-                        all_assigned_drv.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
-                unassigned_drv = [s for s in sv_schools if s not in all_assigned_drv]
-                if unassigned_drv:
-                    st.write("---")
-                    st.warning(f"⚠️ 기사 미배정 학교: {', '.join(unassigned_drv)}")
-
+        if tab_map is not None:
+         with tab_map:
+            st.write("📍 **수거 차량 실시간 GPS 관제**")
+            st.map(pd.DataFrame({'lat':[37.20,37.25],'lon':[127.05,127.10]}))
         # 관리자 사이드바 - 데이터 업로드/백업
         with st.sidebar:
             st.write("---")
