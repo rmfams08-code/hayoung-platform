@@ -1468,10 +1468,188 @@ else:
                     v_sch = []; 
                     for did in ['driver01','driver02','driver03']: v_sch.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
                     v_drivers = 3; v_cars = 2
+                    # 일반업장 수
+                    v_biz = st.session_state.get(f'admin_biz_{vn}', [])
                 else:
                     vd = VENDOR_DATA[vn]; v_sch = vd['schools']; v_drivers = len(vd.get('drivers',[])); v_cars = len(vd.get('차량',[]))
-                mgmt_rows.append({'업체명':vn,'담당학교수':len(v_sch),'기사수':v_drivers,'차량수':v_cars})
+                    v_biz = st.session_state.get(f'admin_biz_{vn}', [])
+                mgmt_rows.append({'업체명':vn,'담당학교':len(v_sch),'일반업장':len(v_biz),'기사수':v_drivers,'차량수':v_cars})
             st.dataframe(pd.DataFrame(mgmt_rows), use_container_width=True, hide_index=True)
+
+            # ★ [신규] 업체별 거래처(학교/일반업장) 관리
+            st.write("---")
+            st.markdown("#### 🏫🏢 업체별 거래처 관리 (학교/일반업장)")
+            mgmt_vendor_sel = st.selectbox("업체 선택", all_vendors, key="mgmt_vendor_sel")
+
+            # --- 해당 업체의 학교/일반업장 목록 가져오기 ---
+            def _get_mgmt_schools(vn):
+                if vn == "하영자원(본사)":
+                    s = []
+                    for did in ['driver01','driver02','driver03']:
+                        s.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
+                    return s
+                return VENDOR_DATA.get(vn,{}).get('schools',[])
+
+            mgmt_schools = _get_mgmt_schools(mgmt_vendor_sel)
+            mgmt_biz_key = f'admin_biz_{mgmt_vendor_sel}'
+            if mgmt_biz_key not in st.session_state:
+                st.session_state[mgmt_biz_key] = []
+            mgmt_biz_list = st.session_state[mgmt_biz_key]
+
+            mgmt_cust_tabs = st.tabs(["🏫 학교 거래처","🏢 일반업장 거래처"])
+
+            # === 학교 거래처 관리 ===
+            with mgmt_cust_tabs[0]:
+                st.markdown(f"**{mgmt_vendor_sel} 담당 학교 ({len(mgmt_schools)}개교)**")
+                if mgmt_schools:
+                    sch_df = pd.DataFrame([{"No":i+1, "학교명":s, "학생수":STUDENT_COUNTS.get(s,'-')} for i,s in enumerate(mgmt_schools)])
+                    st.dataframe(sch_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("배정된 학교가 없습니다.")
+
+                st.write("---")
+                mgmt_sch_mode = st.radio("작업", ["➕ 학교 추가","✏️ 학교 재배정(이동)","🗑️ 학교 제거"], horizontal=True, key="mgmt_sch_mode", label_visibility="collapsed")
+
+                if mgmt_sch_mode == "➕ 학교 추가":
+                    add_c1, add_c2 = st.columns(2)
+                    with add_c1:
+                        # 기존 미배정 학교 선택
+                        all_assigned_sch = []
+                        for vn_t in all_vendors:
+                            all_assigned_sch.extend(_get_mgmt_schools(vn_t))
+                        unassigned_sch = [s for s in SCHOOL_LIST if s not in all_assigned_sch]
+                        if unassigned_sch:
+                            sel_add_sch = st.selectbox("미배정 학교 선택", unassigned_sch, key="mgmt_add_exist_sch")
+                            if st.button("➕ 기존 학교 배정", type="primary", use_container_width=True, key="mgmt_add_exist_btn"):
+                                if mgmt_vendor_sel == "하영자원(본사)":
+                                    DRIVER_ACCOUNTS['driver01']['schools'].append(sel_add_sch)
+                                else:
+                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].append(sel_add_sch)
+                                st.success(f"✅ '{sel_add_sch}' → {mgmt_vendor_sel} 배정 완료!")
+                                st.rerun()
+                        else:
+                            st.caption("미배정 학교가 없습니다.")
+                    with add_c2:
+                        # 신규 학교 직접 입력
+                        new_sch_name = st.text_input("신규 학교명 직접 입력", placeholder="예: 동탄초등학교", key="mgmt_new_sch_name")
+                        new_sch_students = st.number_input("학생수", min_value=0, value=300, step=50, key="mgmt_new_sch_students")
+                        if st.button("➕ 신규 학교 등록+배정", type="primary", use_container_width=True, key="mgmt_new_sch_btn"):
+                            if new_sch_name and new_sch_name not in SCHOOL_LIST:
+                                SCHOOL_LIST.append(new_sch_name)
+                                STUDENT_COUNTS[new_sch_name] = new_sch_students
+                                if mgmt_vendor_sel == "하영자원(본사)":
+                                    DRIVER_ACCOUNTS['driver01']['schools'].append(new_sch_name)
+                                else:
+                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].append(new_sch_name)
+                                st.success(f"✅ '{new_sch_name}'({new_sch_students}명) 신규 등록 → {mgmt_vendor_sel} 배정!")
+                                st.rerun()
+                            elif new_sch_name in SCHOOL_LIST:
+                                st.warning(f"⚠️ '{new_sch_name}'은(는) 이미 등록된 학교입니다.")
+                            else:
+                                st.warning("학교명을 입력하세요.")
+
+                elif mgmt_sch_mode == "✏️ 학교 재배정(이동)":
+                    if mgmt_schools:
+                        move_sch = st.selectbox("이동할 학교", mgmt_schools, key="mgmt_move_sch")
+                        move_to = st.selectbox("이동 대상 업체", [v for v in all_vendors if v != mgmt_vendor_sel], key="mgmt_move_to")
+                        if st.button("🔄 재배정", type="primary", use_container_width=True, key="mgmt_move_btn"):
+                            # 기존 업체에서 제거
+                            if mgmt_vendor_sel == "하영자원(본사)":
+                                for did in ['driver01','driver02','driver03']:
+                                    if move_sch in DRIVER_ACCOUNTS[did].get('schools',[]):
+                                        DRIVER_ACCOUNTS[did]['schools'].remove(move_sch)
+                                        break
+                            else:
+                                if move_sch in VENDOR_DATA[mgmt_vendor_sel]['schools']:
+                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].remove(move_sch)
+                            # 새 업체에 추가
+                            if move_to == "하영자원(본사)":
+                                DRIVER_ACCOUNTS['driver01']['schools'].append(move_sch)
+                            else:
+                                VENDOR_DATA[move_to]['schools'].append(move_sch)
+                            st.success(f"✅ '{move_sch}' : {mgmt_vendor_sel} → {move_to} 재배정 완료!")
+                            st.rerun()
+                    else:
+                        st.info("이동할 학교가 없습니다.")
+
+                elif mgmt_sch_mode == "🗑️ 학교 제거":
+                    if mgmt_schools:
+                        del_sch = st.selectbox("제거할 학교", mgmt_schools, key="mgmt_del_sch")
+                        st.caption(f"⚠️ '{del_sch}'을(를) {mgmt_vendor_sel} 담당에서 제거합니다. (학교 자체는 삭제되지 않고 미배정 상태가 됩니다)")
+                        if st.button("🗑️ 거래처 제거", type="primary", use_container_width=True, key="mgmt_del_sch_btn"):
+                            if mgmt_vendor_sel == "하영자원(본사)":
+                                for did in ['driver01','driver02','driver03']:
+                                    if del_sch in DRIVER_ACCOUNTS[did].get('schools',[]):
+                                        DRIVER_ACCOUNTS[did]['schools'].remove(del_sch)
+                                        break
+                            else:
+                                if del_sch in VENDOR_DATA[mgmt_vendor_sel]['schools']:
+                                    VENDOR_DATA[mgmt_vendor_sel]['schools'].remove(del_sch)
+                            st.success(f"✅ '{del_sch}' 제거 완료! (미배정 상태)")
+                            st.rerun()
+                    else:
+                        st.info("제거할 학교가 없습니다.")
+
+            # === 일반업장 거래처 관리 ===
+            with mgmt_cust_tabs[1]:
+                st.markdown(f"**{mgmt_vendor_sel} 일반업장 거래처 ({len(mgmt_biz_list)}개)**")
+                if mgmt_biz_list:
+                    biz_df = pd.DataFrame([{"No":i+1, "업장명":b} for i,b in enumerate(mgmt_biz_list)])
+                    st.dataframe(biz_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("등록된 일반업장이 없습니다.")
+
+                st.write("---")
+                mgmt_biz_mode = st.radio("작업", ["➕ 업장 추가","✏️ 업장명 수정","🗑️ 업장 삭제"], horizontal=True, key="mgmt_biz_mode", label_visibility="collapsed")
+
+                if mgmt_biz_mode == "➕ 업장 추가":
+                    new_biz_name = st.text_input("신규 일반업장명", placeholder="예: (주)삼성전자 화성사업장", key="mgmt_new_biz")
+                    if st.button("➕ 업장 추가", type="primary", use_container_width=True, key="mgmt_add_biz_btn"):
+                        if new_biz_name and new_biz_name not in mgmt_biz_list:
+                            st.session_state[mgmt_biz_key].append(new_biz_name)
+                            # 외주업체 쪽 세션에도 동기화
+                            va_biz_sync_key = f"va_biz_customers_{mgmt_vendor_sel}"
+                            if va_biz_sync_key in st.session_state:
+                                if new_biz_name not in st.session_state[va_biz_sync_key]:
+                                    st.session_state[va_biz_sync_key].append(new_biz_name)
+                            st.success(f"✅ '{new_biz_name}' 추가 완료!")
+                            st.rerun()
+                        elif new_biz_name in mgmt_biz_list:
+                            st.warning("이미 등록된 업장입니다.")
+                        else:
+                            st.warning("업장명을 입력하세요.")
+
+                elif mgmt_biz_mode == "✏️ 업장명 수정":
+                    if mgmt_biz_list:
+                        edit_biz_sel = st.selectbox("수정할 업장", mgmt_biz_list, key="mgmt_edit_biz_sel")
+                        edit_biz_new = st.text_input("새 업장명", value=edit_biz_sel, key="mgmt_edit_biz_new")
+                        if st.button("✏️ 수정", type="primary", use_container_width=True, key="mgmt_edit_biz_btn"):
+                            if edit_biz_new and edit_biz_new != edit_biz_sel:
+                                idx = st.session_state[mgmt_biz_key].index(edit_biz_sel)
+                                st.session_state[mgmt_biz_key][idx] = edit_biz_new
+                                # 외주업체 쪽 동기화
+                                va_biz_sync_key = f"va_biz_customers_{mgmt_vendor_sel}"
+                                if va_biz_sync_key in st.session_state and edit_biz_sel in st.session_state[va_biz_sync_key]:
+                                    si = st.session_state[va_biz_sync_key].index(edit_biz_sel)
+                                    st.session_state[va_biz_sync_key][si] = edit_biz_new
+                                st.success(f"✅ '{edit_biz_sel}' → '{edit_biz_new}' 수정 완료!")
+                                st.rerun()
+                    else:
+                        st.info("수정할 업장이 없습니다.")
+
+                elif mgmt_biz_mode == "🗑️ 업장 삭제":
+                    if mgmt_biz_list:
+                        del_biz_sel = st.selectbox("삭제할 업장", mgmt_biz_list, key="mgmt_del_biz_sel")
+                        if st.button("🗑️ 삭제", type="primary", use_container_width=True, key="mgmt_del_biz_btn"):
+                            st.session_state[mgmt_biz_key].remove(del_biz_sel)
+                            # 외주업체 쪽 동기화
+                            va_biz_sync_key = f"va_biz_customers_{mgmt_vendor_sel}"
+                            if va_biz_sync_key in st.session_state and del_biz_sel in st.session_state[va_biz_sync_key]:
+                                st.session_state[va_biz_sync_key].remove(del_biz_sel)
+                            st.success(f"✅ '{del_biz_sel}' 삭제 완료!")
+                            st.rerun()
+                    else:
+                        st.info("삭제할 업장이 없습니다.")
 
             # 품목별 하위시트
             st.write("---")
