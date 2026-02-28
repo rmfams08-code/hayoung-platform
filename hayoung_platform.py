@@ -1813,6 +1813,184 @@ else:
                         save_contract_price(sel_cv, new_ct_name, new_ct_val)
                         st.success(f"✅ 추가! (DB 영구 반영)"); st.rerun()
 
+            # ★ [신규] 외주업체별 수거일정 관리 (월별/일별 + 기사 지정)
+            st.write("---")
+            st.subheader("📅 외주업체별 수거일정 관리")
+            sel_sched_v = st.selectbox("업체 선택", list(VENDOR_DATA.keys()), key="sub_sched_vendor")
+            sv_data = VENDOR_DATA[sel_sched_v]
+            sv_schools = sv_data['schools']
+            sv_driver_ids = sv_data.get('drivers', [])
+            sv_drivers = {did: DRIVER_ACCOUNTS[did]['name'] for did in sv_driver_ids if did in DRIVER_ACCOUNTS}
+
+            sched_sub_tabs = st.tabs(["📅 월별 일정 현황","📋 일별 일정 현황","✏️ 일정 등록/수정","🗑️ 일정 삭제","🚚 기사 지정"])
+
+            # --- 탭1: 월별 일정 현황 ---
+            with sched_sub_tabs[0]:
+                st.markdown(f"**{sel_sched_v} 월별 수거일정 현황**")
+                has_monthly = False
+                for m in range(1, 13):
+                    sk = f"monthly_sched_{sel_sched_v}_{m}"
+                    if sk in st.session_state:
+                        has_monthly = True
+                        sd = st.session_state[sk]
+                        # 기사 배정 정보
+                        driver_key = f"sched_driver_{sel_sched_v}_{m}"
+                        assigned_driver = st.session_state.get(driver_key, "미지정")
+                        with st.expander(f"📅 {m}월 | {', '.join(sd.get('요일',[]))} | 기사: {assigned_driver}", expanded=(m==CURRENT_MONTH)):
+                            sc1, sc2, sc3 = st.columns(3)
+                            with sc1: st.write(f"**수거 요일:** {', '.join(sd.get('요일',[]))}")
+                            with sc2: st.write(f"**수거 품목:** {', '.join(sd.get('품목',[]))}")
+                            with sc3: st.write(f"**담당 기사:** {assigned_driver}")
+                            st.write(f"**대상 학교 ({len(sd.get('학교',[]))}):** {', '.join(sd.get('학교',[]))}")
+                if not has_monthly:
+                    st.info(f"{sel_sched_v}에 등록된 월별 일정이 없습니다. '✏️ 일정 등록/수정' 탭에서 등록하세요.")
+
+            # --- 탭2: 일별 일정 현황 ---
+            with sched_sub_tabs[1]:
+                st.markdown(f"**{sel_sched_v} 일별 수거일정**")
+                # 오늘 일정
+                today_key = f'schedule_{sel_sched_v}'
+                today_sch = st.session_state.get(today_key, sv_schools)
+                st.markdown(f"**📅 오늘 ({CURRENT_DATE}) 수거 학교:**")
+                if today_sch:
+                    for si, s in enumerate(today_sch):
+                        driver_for_sch = "미지정"
+                        for did, dinfo in DRIVER_ACCOUNTS.items():
+                            if did in sv_driver_ids and s in dinfo.get('schools',[]):
+                                driver_for_sch = dinfo['name']; break
+                        st.markdown(f"  {si+1}. 🏫 {s} → 🚚 {driver_for_sch}")
+                else:
+                    st.info("오늘 배정된 수거 학교가 없습니다.")
+                # 수거예정일 개별 등록 내역
+                planned_key = f'planned_schedules'
+                if st.session_state.get(planned_key):
+                    vendor_planned = [p for p in st.session_state[planned_key] if p.get('업체')==sel_sched_v]
+                    if vendor_planned:
+                        st.write("---")
+                        st.markdown(f"**📋 등록된 수거예정일 ({len(vendor_planned)}건)**")
+                        st.dataframe(pd.DataFrame(vendor_planned), use_container_width=True, hide_index=True)
+
+            # --- 탭3: 일정 등록/수정 ---
+            with sched_sub_tabs[2]:
+                st.markdown(f"**✏️ {sel_sched_v} 수거일정 등록/수정**")
+                sub_reg_tabs = st.tabs(["🗓️ 월별 정기 일정","📋 오늘 일정 수정","📅 수거예정일 등록"])
+                # 월별 정기 일정
+                with sub_reg_tabs[0]:
+                    sub_sm = st.selectbox("월 선택", list(range(1,13)), format_func=lambda x: f"{x}월", key="sub_sched_m")
+                    sk_ex = st.session_state.get(f"monthly_sched_{sel_sched_v}_{sub_sm}", {"요일":['월','수','금'], "학교":sv_schools, "품목":['음식물']})
+                    sub_days = st.multiselect("수거 요일", ['월','화','수','목','금'], default=sk_ex.get('요일',['월','수','금']), key=f"sub_sd_{sel_sched_v}_{sub_sm}")
+                    sub_items = st.multiselect("수거 품목", ['음식물','사업장','재활용'], default=sk_ex.get('품목',['음식물']), key=f"sub_si_{sel_sched_v}_{sub_sm}")
+                    sub_schools = st.multiselect("대상 학교", sv_schools, default=[s for s in sk_ex.get('학교',sv_schools) if s in sv_schools], key=f"sub_ss_{sel_sched_v}_{sub_sm}")
+                    # 기사 지정
+                    driver_opts = ["미지정"] + [f"{did} ({dname})" for did, dname in sv_drivers.items()]
+                    cur_driver_key = f"sched_driver_{sel_sched_v}_{sub_sm}"
+                    cur_driver = st.session_state.get(cur_driver_key, "미지정")
+                    sub_driver = st.selectbox("담당 기사", driver_opts, index=0, key=f"sub_drv_{sel_sched_v}_{sub_sm}")
+                    if st.button("💾 월별 일정 저장", type="primary", use_container_width=True, key=f"sub_save_m_{sel_sched_v}"):
+                        st.session_state[f"monthly_sched_{sel_sched_v}_{sub_sm}"] = {"요일":sub_days, "학교":sub_schools, "품목":sub_items}
+                        # 기사 지정 저장
+                        driver_val = sub_driver if sub_driver != "미지정" else "미지정"
+                        if driver_val != "미지정":
+                            driver_val = sub_driver.split(" (")[1].rstrip(")") if " (" in sub_driver else sub_driver
+                        st.session_state[cur_driver_key] = driver_val
+                        st.success(f"✅ {sel_sched_v} {sub_sm}월 일정 저장! (기사: {driver_val})")
+                        st.rerun()
+                # 오늘 일정 수정
+                with sub_reg_tabs[1]:
+                    st.markdown(f"**{sel_sched_v} 오늘 수거 학교 수정**")
+                    today_key_edit = f'schedule_{sel_sched_v}'
+                    cur_today = st.session_state.get(today_key_edit, sv_schools)
+                    new_today = st.multiselect("오늘 수거 학교", sv_schools, default=[s for s in cur_today if s in sv_schools], key=f"sub_today_{sel_sched_v}")
+                    if st.button("💾 오늘 일정 저장", type="primary", use_container_width=True, key=f"sub_save_today_{sel_sched_v}"):
+                        st.session_state[today_key_edit] = new_today
+                        st.success(f"✅ {sel_sched_v} 오늘 일정 업데이트! ({len(new_today)}개교)")
+                        st.rerun()
+                # 수거예정일 개별 등록
+                with sub_reg_tabs[2]:
+                    sub_sp_sch = st.selectbox("거래처", sv_schools if sv_schools else ["없음"], key=f"sub_sp_sch_{sel_sched_v}")
+                    sub_sp_item = st.selectbox("품목", ['음식물','사업장','재활용'], key=f"sub_sp_item_{sel_sched_v}")
+                    sub_sp_date = st.date_input("수거 예정일", key=f"sub_sp_date_{sel_sched_v}")
+                    sub_sp_driver = st.selectbox("담당 기사", ["미지정"] + list(sv_drivers.values()), key=f"sub_sp_drv_{sel_sched_v}")
+                    if st.button("📅 예정일 등록", type="primary", use_container_width=True, key=f"sub_sp_save_{sel_sched_v}"):
+                        pk = 'planned_schedules'
+                        if pk not in st.session_state: st.session_state[pk] = []
+                        st.session_state[pk].append({"업체":sel_sched_v,"학교":sub_sp_sch,"품목":sub_sp_item,"날짜":str(sub_sp_date),"기사":sub_sp_driver})
+                        st.success(f"✅ {sel_sched_v} → {sub_sp_sch} ({sub_sp_item}) {sub_sp_date} 등록!")
+
+            # --- 탭4: 일정 삭제 ---
+            with sched_sub_tabs[3]:
+                st.markdown(f"**🗑️ {sel_sched_v} 수거일정 삭제**")
+                del_type = st.radio("삭제 유형", ["월별 정기 일정 삭제","수거예정일 삭제"], horizontal=True, key="sub_del_type")
+                if del_type == "월별 정기 일정 삭제":
+                    existing_months = []
+                    for m in range(1,13):
+                        if f"monthly_sched_{sel_sched_v}_{m}" in st.session_state:
+                            existing_months.append(m)
+                    if existing_months:
+                        del_m = st.selectbox("삭제할 월", existing_months, format_func=lambda x: f"{x}월", key="sub_del_m")
+                        st.caption(f"⚠️ {sel_sched_v}의 {del_m}월 수거일정이 완전히 삭제됩니다.")
+                        if st.button(f"🗑️ {del_m}월 일정 삭제", type="primary", use_container_width=True, key="sub_del_m_btn"):
+                            del st.session_state[f"monthly_sched_{sel_sched_v}_{del_m}"]
+                            # 기사 지정도 삭제
+                            dk = f"sched_driver_{sel_sched_v}_{del_m}"
+                            if dk in st.session_state: del st.session_state[dk]
+                            st.success(f"✅ {sel_sched_v} {del_m}월 일정 삭제 완료!")
+                            st.rerun()
+                    else:
+                        st.info("삭제할 월별 일정이 없습니다.")
+                else:
+                    pk = 'planned_schedules'
+                    vendor_planned = [p for p in st.session_state.get(pk,[]) if p.get('업체')==sel_sched_v]
+                    if vendor_planned:
+                        del_labels = [f"{p['날짜']} | {p['학교']} | {p['품목']}" for p in vendor_planned]
+                        del_sel = st.selectbox("삭제할 예정일", del_labels, key="sub_del_planned")
+                        if st.button("🗑️ 예정일 삭제", type="primary", use_container_width=True, key="sub_del_p_btn"):
+                            idx = del_labels.index(del_sel)
+                            # 전체 목록에서 해당 건 제거
+                            target = vendor_planned[idx]
+                            st.session_state[pk] = [p for p in st.session_state[pk] if not (p.get('업체')==target.get('업체') and p.get('날짜')==target.get('날짜') and p.get('학교')==target.get('학교'))]
+                            st.success(f"✅ 삭제 완료!")
+                            st.rerun()
+                    else:
+                        st.info("삭제할 수거예정일이 없습니다.")
+
+            # --- 탭5: 기사 지정 관리 ---
+            with sched_sub_tabs[4]:
+                st.markdown(f"**🚚 {sel_sched_v} 수거기사 배정 관리**")
+                st.caption("기사별 담당 학교를 변경하면 기사 앱 일정에 실시간 반영됩니다.")
+                if sv_drivers:
+                    for did, dname in sv_drivers.items():
+                        dinfo = DRIVER_ACCOUNTS[did]
+                        cur_sch = dinfo.get('schools', [])
+                        with st.expander(f"🚚 {dname} (ID: {did}) - 담당 {len(cur_sch)}개교", expanded=True):
+                            # 현재 담당 학교 표시
+                            if cur_sch:
+                                st.write(f"현재 담당: {', '.join(cur_sch)}")
+                            else:
+                                st.info("담당 학교 없음")
+                            # 학교 재배정
+                            new_assignment = st.multiselect(
+                                f"{dname} 담당 학교 수정",
+                                sv_schools,
+                                default=[s for s in cur_sch if s in sv_schools],
+                                key=f"sub_driver_assign_{did}"
+                            )
+                            if st.button(f"💾 {dname} 배정 저장", use_container_width=True, key=f"sub_driver_save_{did}"):
+                                DRIVER_ACCOUNTS[did]['schools'] = new_assignment
+                                st.success(f"✅ {dname} → {len(new_assignment)}개교 배정 완료! (기사 앱 즉시 반영)")
+                                st.rerun()
+                else:
+                    st.info(f"{sel_sched_v}에 등록된 기사가 없습니다.")
+                # 미배정 학교 확인
+                all_assigned_drv = []
+                for did in sv_driver_ids:
+                    if did in DRIVER_ACCOUNTS:
+                        all_assigned_drv.extend(DRIVER_ACCOUNTS[did].get('schools',[]))
+                unassigned_drv = [s for s in sv_schools if s not in all_assigned_drv]
+                if unassigned_drv:
+                    st.write("---")
+                    st.warning(f"⚠️ 기사 미배정 학교: {', '.join(unassigned_drv)}")
+
         # 관리자 사이드바 - 데이터 업로드/백업
         with st.sidebar:
             st.write("---")
@@ -1858,60 +2036,6 @@ else:
                         st.download_button("💾 실제데이터 백업", data=df_real.to_csv(index=False).encode('utf-8-sig'), file_name=f"hayoung_real_backup_{CURRENT_DATE}.csv", use_container_width=True)
                 if not df_all.empty:
                     st.caption(f"📊 시뮬레이션: {len(df_all)}건 | 실제: {len(df_real)}건")
-            with st.expander("📅 오늘의 수거일정 (간편)"):
-                st.caption("상세 등록/수정은 '📅 수거일정 관리' 탭에서 가능합니다.")
-                for vn in list(VENDOR_DATA.keys()):
-                    sch_count = len(st.session_state.get(f'schedule_{vn}', VENDOR_DATA[vn]['schools']))
-                    st.caption(f"• {vn}: {sch_count}개교")
-                own_count = len(st.session_state.get('schedule_하영자원(본사)', []))
-                st.caption(f"• 하영자원(본사): {own_count}개교")
-            with st.expander("📄 월말거래명세서 발송"):
-                st.caption("PDF 파일을 업로드하면 자동 분석 후 거래명세서를 생성합니다.")
-                inv_file = st.file_uploader("잔반처리량 PDF/CSV/엑셀", type=['pdf','csv','xlsx'], key="admin_inv_upload")
-                if inv_file:
-                    try:
-                        if inv_file.name.endswith('.csv'):
-                            df_inv = pd.read_csv(inv_file)
-                        elif inv_file.name.endswith(('.xlsx','.xls')):
-                            df_inv = pd.read_excel(inv_file)
-                        else:
-                            # PDF → 텍스트 파싱
-                            import re as re_mod
-                            content = inv_file.read().decode('utf-8', errors='ignore')
-                            # PDF 원본 텍스트에서 데이터 추출 시도
-                            inv_file.seek(0)
-                            lines_raw = content.split('\n')
-                            rows_parsed = []
-                            for line in lines_raw:
-                                m = re_mod.search(r'(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*\S+\s+(\d+)\s+[\d.]+\s+([\d,]+)', line)
-                                if m:
-                                    rows_parsed.append({'수거일':m.group(1),'단위(L)':int(m.group(2)),'단가':170,'공급가':int(m.group(3).replace(',','')),'재활용방법':'퇴비화및비료생산'})
-                            if rows_parsed:
-                                df_inv = pd.DataFrame(rows_parsed)
-                            else:
-                                df_inv = pd.DataFrame()
-                                st.warning("PDF에서 데이터를 자동 추출하지 못했습니다. CSV/엑셀로 업로드해 주세요.")
-                        if not df_inv.empty:
-                            st.success(f"✅ {len(df_inv)}건 분석 완료")
-                            st.session_state['admin_inv_data'] = df_inv
-                            st.dataframe(df_inv.head(10), use_container_width=True, hide_index=True)
-                            # 요약
-                            qty_col = [c for c in df_inv.columns if '단위' in c or 'L' in c or 'kg' in c or '음식물' in c]
-                            sup_col = [c for c in df_inv.columns if '공급가' in c]
-                            if qty_col: st.metric("총 수거량", f"{df_inv[qty_col[0]].sum():,.0f}")
-                            if sup_col: st.metric("총 공급가", f"{df_inv[sup_col[0]].sum():,.0f}원")
-                    except Exception as e:
-                        st.error(f"파일 분석 실패: {e}")
-                # 거래명세서 PDF 생성
-                if 'admin_inv_data' in st.session_state and not st.session_state['admin_inv_data'].empty:
-                    st.write("---")
-                    inv_vendor = st.selectbox("발송 업체", ["하영자원(본사)"] + list(VENDOR_DATA.keys()), key="inv_vendor")
-                    inv_school = st.text_input("거래처(학교)명", value="평촌초등학교", key="inv_school")
-                    inv_month = st.number_input("월", value=11, min_value=1, max_value=12, key="inv_month")
-                    if st.button("📄 거래명세서 PDF 생성", type="primary", use_container_width=True, key="gen_invoice"):
-                        pdf_data = create_monthly_invoice_pdf(inv_vendor, inv_school, inv_month, "2025", st.session_state['admin_inv_data'])
-                        st.download_button("📥 거래명세서 다운로드", data=pdf_data, file_name=f"{inv_school}_{inv_month}월_거래명세서.pdf", mime="application/pdf", use_container_width=True, key="dl_invoice")
-                        st.success("✅ 거래명세서 PDF 생성 완료!")
 
     # ============ [모드2] 학교 담당자 ============
     elif role == "school":
