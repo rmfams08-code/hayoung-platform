@@ -292,32 +292,20 @@ TREE_FACTOR = 6.6   # kg CO₂ per 소나무 1그루/년
 
 @st.cache_data(ttl=300)
 def load_real_data():
-    """실제 2025년 수거 데이터 로딩 (CSV→SQLite 마이그레이션 + 캐싱)"""
-    db_table_exists = False
+    """실제 수거 데이터 로딩 (무조건 최신 CSV를 읽어와서 DB와 강제 동기화)"""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cnt = conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collection_data'").fetchone()[0]
-        if cnt > 0:
-            row_cnt = conn.execute("SELECT count(*) FROM collection_data").fetchone()[0]
-            if row_cnt > 0:
-                db_table_exists = True
-        conn.close()
-    except:
-        pass
-    if db_table_exists:
-        conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql("SELECT * FROM collection_data", conn)
-        conn.close()
-        return df
-    # CSV에서 로드 후 SQLite에 저장
-    try:
+        # 1. 고집부리지 말고 무조건 최신 CSV 파일(REAL_DATA_FILE)을 읽는다!
         df = pd.read_csv(REAL_DATA_FILE)
+        
+        # 2. 읽어온 최신 데이터로 뒷단(SQLite DB)을 강제로 덮어씌운다!
         if not df.empty:
             conn = sqlite3.connect(DB_PATH)
             df.to_sql('collection_data', conn, if_exists='replace', index=False)
             conn.close()
+            
         return df
-    except:
+    except Exception as e:
+        # 파일이 없거나 에러가 나면 조용히 빈 표를 넘겨준다.
         return pd.DataFrame()
 
 def preprocess_real_data(df):
