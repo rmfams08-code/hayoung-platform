@@ -17,6 +17,10 @@ from datetime import datetime, timedelta
 # ==========================================
 DB_PATH = "hayoung_platform.db"
 
+def _hash_pw(pw):
+    """비밀번호 SHA-256 해시"""
+    return hashlib.sha256(str(pw).encode('utf-8')).hexdigest()
+
 def init_db():
     """SQLite DB 초기화 (테이블 없으면 생성)"""
     conn = sqlite3.connect(DB_PATH)
@@ -37,6 +41,77 @@ def init_db():
         (vendor TEXT, name TEXT, biz_no TEXT, rep TEXT, addr TEXT,
          biz_type TEXT, biz_item TEXT, email TEXT, cust_type TEXT,
          PRIMARY KEY(vendor, name))''')
+    # ★ 실제 수거 데이터 테이블
+    c.execute('''CREATE TABLE IF NOT EXISTS real_collection
+        (id INTEGER PRIMARY KEY AUTOINCREMENT,
+         날짜 TEXT, 학교명 TEXT, "음식물(kg)" REAL DEFAULT 0,
+         "단가(원)" REAL DEFAULT 162, 공급가 REAL DEFAULT 0,
+         재활용방법 TEXT DEFAULT '', 재활용업체 TEXT DEFAULT '',
+         월 INTEGER, 년도 TEXT, 월별파일 TEXT,
+         수거업체 TEXT DEFAULT '', 수거기사 TEXT DEFAULT '', 수거시간 TEXT DEFAULT '',
+         "사업장(kg)" REAL DEFAULT 0, "재활용(kg)" REAL DEFAULT 0,
+         UNIQUE(날짜, 학교명))''')
+    # ★ 시뮬레이션 데이터 테이블
+    c.execute('''CREATE TABLE IF NOT EXISTS sim_collection
+        (id INTEGER PRIMARY KEY AUTOINCREMENT,
+         날짜 TEXT, 학교명 TEXT, 학생수 INTEGER DEFAULT 0,
+         수거업체 TEXT DEFAULT '', "음식물(kg)" REAL DEFAULT 0,
+         "재활용(kg)" REAL DEFAULT 0, "사업장(kg)" REAL DEFAULT 0,
+         "단가(원)" REAL DEFAULT 150, "재활용단가(원)" REAL DEFAULT 300,
+         "사업장단가(원)" REAL DEFAULT 200, 상태 TEXT DEFAULT '정산대기',
+         UNIQUE(날짜, 학교명))''')
+    # ★ 사용자 계정 테이블
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+        (user_id TEXT PRIMARY KEY, pw_hash TEXT, role TEXT, name TEXT,
+         vendor TEXT DEFAULT '', schools TEXT DEFAULT '')''')
+    conn.commit(); conn.close()
+
+def _init_users_db():
+    """계정 데이터를 DB에 초기화 (DB가 비어있을 때만)"""
+    conn = sqlite3.connect(DB_PATH)
+    row_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if row_count > 0:
+        conn.close(); return  # 이미 초기화됨
+    # 모든 계정을 DB에 삽입
+    all_accs = {}
+    all_accs.update(SCHOOL_ACCOUNTS)
+    all_accs.update(EDU_OFFICE_ACCOUNTS)
+    all_accs.update(DRIVER_ACCOUNTS)
+    all_accs.update(ADMIN_ACCOUNTS)
+    all_accs.update(VENDOR_ADMIN_ACCOUNTS)
+    for uid, acc in all_accs.items():
+        pw_hash = _hash_pw(acc['pw'])
+        role = acc.get('role','')
+        name = acc.get('name','')
+        vendor = acc.get('vendor','')
+        schools = json.dumps(acc.get('schools',[]), ensure_ascii=False) if 'schools' in acc else ''
+        conn.execute("INSERT OR IGNORE INTO users (user_id, pw_hash, role, name, vendor, schools) VALUES (?,?,?,?,?,?)",
+                     (uid, pw_hash, role, name, vendor, schools))
+    conn.commit(); conn.close()
+
+def _migrate_csv_to_db():
+    """첫 실행 시 기존 CSV 데이터를 DB로 임포트 (CSV 파일은 백업용으로 유지)"""
+    conn = sqlite3.connect(DB_PATH)
+    # 실제 수거 데이터 마이그레이션
+    if os.path.exists(REAL_DATA_FILE):
+        try:
+            row_count = conn.execute("SELECT COUNT(*) FROM real_collection").fetchone()[0]
+            if row_count == 0:  # DB가 비어있을 때만 임포트
+                df = pd.read_csv(REAL_DATA_FILE)
+                if not df.empty:
+                    df.to_sql('real_collection', conn, if_exists='append', index=False)
+        except Exception:
+            pass
+    # 시뮬레이션 데이터 마이그레이션
+    if os.path.exists(DB_FILE):
+        try:
+            row_count = conn.execute("SELECT COUNT(*) FROM sim_collection").fetchone()[0]
+            if row_count == 0:
+                df = pd.read_csv(DB_FILE)
+                if not df.empty:
+                    df.to_sql('sim_collection', conn, if_exists='append', index=False)
+        except Exception:
+            pass
     conn.commit(); conn.close()
 
 def db_get(table, where_dict=None):
@@ -77,6 +152,7 @@ def db_delete(table, where_dict):
     conn.commit(); conn.close()
 
 init_db()
+_migrate_csv_to_db()
 
 # ==========================================
 # ★ 공통 상수 & 재사용 함수 (중복 제거)
@@ -249,6 +325,24 @@ def render_esg_cards(total_kg, total_co2, total_tree, total_supply):
     with ec2: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌍 CO₂ 감축량</div><div class="metric-value-recycle">{total_co2:,.1f}kg</div></div>', unsafe_allow_html=True)
     with ec3: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌲 소나무 식재 효과</div><div class="metric-value-recycle">{total_tree:,}그루</div></div>', unsafe_allow_html=True)
     with ec4: st.markdown(f'<div class="custom-card" style="text-align:center;"><div class="metric-title">💰 환경비용 절감</div><div class="metric-value-total">{total_supply:,.0f}원</div></div>', unsafe_allow_html=True)
+
+def render_esg_banner(title, total_kg, total_co2, total_tree, subtitle=""):
+    """ESG 환경 기여도 배너 (학교/교육청 공통)"""
+    sub_html = f'<p style="margin:0;font-size:13px;opacity:0.9;">{subtitle}</p>' if subtitle else ''
+    st.markdown(f'<div style="background:linear-gradient(135deg,#11998e,#38ef7d);padding:20px;border-radius:12px;color:white;margin-bottom:20px;"><h4 style="margin:0;margin-bottom:10px;">{title}</h4>{sub_html}<h2 style="margin:8px 0;">수거량: {total_kg:,.0f} kg → CO₂ 감축: {total_co2:,.1f} kg (🌲 소나무 {total_tree:,}그루)</h2></div>', unsafe_allow_html=True)
+
+def render_esg_banner_large(title, total_co2, total_tree):
+    """전사 ESG 대형 배너 (관리자 대시보드)"""
+    st.markdown(f'<div style="background-color:#61b346;padding:30px;border-radius:12px;color:white;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><div style="flex:1;text-align:center;"><h3 style="margin:0;color:white;">{title}</h3><p style="margin:0;font-size:16px;opacity:0.9;">누적 CO₂ 감축량</p><h1 style="margin:0;color:white;font-size:40px;font-weight:900;">{total_co2:,.1f} kg</h1></div><div style="font-size:40px;font-weight:bold;padding:0 20px;">=</div><div style="flex:1;text-align:center;"><p style="margin:0;font-size:16px;opacity:0.9;margin-top:35px;">소나무 식재 효과</p><h1 style="margin:0;color:white;font-size:40px;font-weight:900;">🌲 {total_tree:,} 그루</h1></div></div>', unsafe_allow_html=True)
+
+def render_styled_dataframe(df, title=None, hide_index=True):
+    """공통 데이터프레임 표시 함수"""
+    if title:
+        st.markdown(f"**{title}**")
+    if df.empty:
+        st.info("데이터가 없습니다.")
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=hide_index)
 
 
 def load_price_from_db():
@@ -425,27 +519,38 @@ ALL_ACCOUNTS.update(EDU_OFFICE_ACCOUNTS)
 ALL_ACCOUNTS.update(DRIVER_ACCOUNTS)
 ALL_ACCOUNTS.update(ADMIN_ACCOUNTS)
 ALL_ACCOUNTS.update(VENDOR_ADMIN_ACCOUNTS)
-
-def _hash_pw(pw):
-    """비밀번호 SHA-256 해시"""
-    return hashlib.sha256(str(pw).encode('utf-8')).hexdigest()
+_init_users_db()  # DB에 계정 초기화
 
 def authenticate(user_id, password):
-    """비밀번호 검증 (입력값을 해시하여 저장된 해시와 비교, 또는 평문 비교 후 해시 마이그레이션)"""
-    if user_id not in ALL_ACCOUNTS:
-        return None
-    acc = ALL_ACCOUNTS[user_id]
-    stored_pw = str(acc.get('pw',''))
+    """DB에서 계정 조회 + 비밀번호 검증, 없으면 메모리 폴백"""
     hashed_input = _hash_pw(password)
-    # 이미 해시 저장된 경우 (64자 hex)
-    if len(stored_pw) == 64:
-        if stored_pw == hashed_input:
-            return acc
-    else:
-        # 평문 비교 후, 일치하면 해시로 마이그레이션
-        if stored_pw == str(password):
-            acc['pw'] = hashed_input  # 해시로 업그레이드
-            return acc
+    # 1차: DB 조회
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+        conn.close()
+        if row:
+            # row: (user_id, pw_hash, role, name, vendor, schools)
+            if row[1] == hashed_input:
+                result = {"role": row[2], "name": row[3]}
+                if row[4]: result["vendor"] = row[4]
+                if row[5]:
+                    try: result["schools"] = json.loads(row[5])
+                    except Exception: result["schools"] = []
+                return result
+            return None
+    except Exception:
+        pass
+    # 2차: 메모리 폴백 (DB 오류 시)
+    if user_id in ALL_ACCOUNTS:
+        acc = ALL_ACCOUNTS[user_id]
+        stored_pw = str(acc.get('pw',''))
+        if len(stored_pw) == 64:
+            if stored_pw == hashed_input: return acc
+        else:
+            if stored_pw == str(password):
+                acc['pw'] = hashed_input
+                return acc
     return None
 
 # ==========================================
@@ -527,19 +632,87 @@ TREE_FACTOR = 6.6   # kg CO₂ per 소나무 1그루/년
 
 @st.cache_data(ttl=300)
 def load_real_data():
-    """실제 수거 데이터 로딩 (무조건 최신 CSV를 읽어와서 DB와 강제 동기화)"""
+    """실제 수거 데이터 로딩 (SQLite DB에서 읽기)"""
     try:
-        # 1. 무조건 최신 CSV 파일(REAL_DATA_FILE)을 읽는다
-        df = pd.read_csv(REAL_DATA_FILE)
-        # 2. 읽어온 최신 데이터로 SQLite DB를 강제로 덮어씌운다
-        if not df.empty:
-            conn = sqlite3.connect(DB_PATH)
-            df.to_sql('collection_data', conn, if_exists='replace', index=False)
-            conn.close()
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql_query("SELECT * FROM real_collection", conn)
+        conn.close()
         return df
-    except Exception as e:
-        # 파일이 없거나 에러가 나면 빈 DataFrame 반환
+    except Exception:
         return pd.DataFrame()
+
+def load_data():
+    """시뮬레이션 데이터 로딩 (SQLite DB에서 읽기)"""
+    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        df = pd.read_sql_query("SELECT * FROM sim_collection", conn)
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame(columns=cols)
+
+def save_data(new_row):
+    """시뮬레이션 데이터 1건 저장 (DB 트랜잭션)"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df_row = pd.DataFrame([new_row])
+        df_row.to_sql('sim_collection', conn, if_exists='append', index=False)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+def save_real_row(row_dict):
+    """실제 수거 데이터 1건 저장 (DB 트랜잭션, 중복 시 업데이트)"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df_row = pd.DataFrame([row_dict])
+        # UNIQUE(날짜, 학교명) 충돌 시 기존 행 대체
+        cols = ','.join([f'"{c}"' for c in df_row.columns])
+        placeholders = ','.join(['?'] * len(df_row.columns))
+        sql = f'INSERT OR REPLACE INTO real_collection ({cols}) VALUES ({placeholders})'
+        conn.execute(sql, list(df_row.iloc[0]))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+def save_real_bulk(df):
+    """실제 수거 데이터 다건 저장 (CSV 업로드 등)"""
+    if df.empty:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        for _, row in df.iterrows():
+            cols = ','.join([f'"{c}"' for c in row.index])
+            placeholders = ','.join(['?'] * len(row))
+            sql = f'INSERT OR REPLACE INTO real_collection ({cols}) VALUES ({placeholders})'
+            conn.execute(sql, list(row))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+def save_sim_bulk(df):
+    """시뮬레이션 데이터 다건 저장"""
+    if df.empty:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        for _, row in df.iterrows():
+            cols = ','.join([f'"{c}"' for c in row.index])
+            placeholders = ','.join(['?'] * len(row))
+            sql = f'INSERT OR REPLACE INTO sim_collection ({cols}) VALUES ({placeholders})'
+            conn.execute(sql, list(row))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
 
 def preprocess_real_data(df):
     """실제 데이터 전처리 (날짜/월/탄소감축 등 파생 컬럼 생성)"""
@@ -553,38 +726,12 @@ def preprocess_real_data(df):
     df['수거여부'] = df['음식물(kg)'] > 0
     df['탄소감축량(kg)'] = df['음식물(kg)'] * CO2_FACTOR
     df['소나무환산(그루)'] = df['탄소감축량(kg)'] / TREE_FACTOR
-    # ★ 수거업체/기사/시간 기본값 패치 (기존 데이터에 없는 경우)
-    if '수거업체' not in df.columns:
-        df['수거업체'] = '하영자원(본사)'
-    else:
-        df['수거업체'] = df['수거업체'].fillna('하영자원(본사)')
-    if '수거기사' not in df.columns:
-        df['수거기사'] = ''
-    else:
-        df['수거기사'] = df['수거기사'].fillna('')
-    if '수거시간' not in df.columns:
-        df['수거시간'] = ''
-    else:
-        df['수거시간'] = df['수거시간'].fillna('')
+    for col, default in [('수거업체','하영자원(본사)'),('수거기사',''),('수거시간','')]:
+        if col not in df.columns: df[col] = default
+        else: df[col] = df[col].fillna(default)
     if '사업장(kg)' not in df.columns: df['사업장(kg)'] = 0
     if '재활용(kg)' not in df.columns: df['재활용(kg)'] = 0
     return df
-
-def load_data():
-    cols = ["날짜", "학교명", "학생수", "수거업체", "음식물(kg)", "재활용(kg)", "사업장(kg)", "단가(원)", "재활용단가(원)", "사업장단가(원)", "상태"]
-    try:
-        df = pd.read_csv(DB_FILE)
-        return df
-    except Exception:
-        return pd.DataFrame(columns=cols)
-
-def save_data(new_row):
-    df = load_data()
-    if not df.empty:
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    else:
-        df = pd.DataFrame([new_row])
-    df.to_csv(DB_FILE, index=False)
 
 # --- 실제 데이터 로딩 + 전처리 ---
 df_real = preprocess_real_data(load_real_data())
@@ -1164,7 +1311,7 @@ else:
 
         total_co2_all = df_all['탄소감축량(kg)'].sum()
         tree_count_all = int(total_co2_all / TREE_FACTOR)
-        st.markdown(f'<div style="background-color:#61b346;padding:30px;border-radius:12px;color:white;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><div style="flex:1;text-align:center;"><h3 style="margin:0;color:white;">🌍 전사 ESG 탄소 저감 성과</h3><p style="margin:0;font-size:16px;opacity:0.9;">누적 CO₂ 감축량</p><h1 style="margin:0;color:white;font-size:40px;font-weight:900;">{total_co2_all:,.1f} kg</h1></div><div style="font-size:40px;font-weight:bold;padding:0 20px;">=</div><div style="flex:1;text-align:center;"><p style="margin:0;font-size:16px;opacity:0.9;margin-top:35px;">소나무 식재 효과</p><h1 style="margin:0;color:white;font-size:40px;font-weight:900;">🌲 {tree_count_all:,} 그루</h1></div></div>', unsafe_allow_html=True)
+        render_esg_banner_large("🌍 전사 ESG 탄소 저감 성과", total_co2_all, tree_count_all)
 
         col_esg1, col_esg2, col_esg3 = st.columns([1,2,1])
         with col_esg1: st.button("📄 전사 ESG 성과 보고서 출력", use_container_width=True)
@@ -1228,7 +1375,7 @@ else:
                         else:
                             st.dataframe(df_m[['날짜','학교명','음식물(kg)','단가(원)','공급가','재활용방법'] + [c for c in ['수거업체','수거기사','수거시간'] if c in df_m.columns]],use_container_width=True, hide_index=True)
             else:
-                st.warning("실제 수거 데이터 파일(hayoung_real_2025.csv)이 없습니다.")
+                st.warning("실제 수거 데이터가 없습니다. 사이드바에서 데이터를 업로드해주세요.")
 
         # 기존 시뮬레이션 정산 탭
         all_schools_sim = sorted(df_all['학교명'].unique()) if not df_all.empty else []
@@ -1851,27 +1998,19 @@ else:
                     try:
                         df_up = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                         st.success(f"✅ {len(df_up)}건 로드")
-                        # 실제 수거 데이터 구조 자동 감지 (음식물(kg) + 공급가 컬럼 존재 시)
                         is_real_data = '음식물(kg)' in df_up.columns and '공급가' in df_up.columns
                         if is_real_data:
-                            st.info("📊 실제 수거 데이터 형식 감지 → 행정실/교육청 공유 데이터로 저장됩니다.")
+                            st.info("📊 실제 수거 데이터 형식 감지 → DB에 저장됩니다.")
                         if st.button("🔄 DB 업데이트", type="primary", use_container_width=True):
                             if is_real_data:
-                                # 실제 데이터(REAL_DATA_FILE)에 병합
-                                existing = load_real_data()
-                                if not existing.empty:
-                                    df_merged = pd.concat([existing, df_up], ignore_index=True).drop_duplicates(subset=['날짜','학교명'], keep='last')
-                                else:
-                                    df_merged = df_up
-                                df_merged.to_csv(REAL_DATA_FILE, index=False)
-                                st.success("✅ 실제 수거 데이터 반영 완료! (행정실/교육청 공유)")
+                                save_real_bulk(df_up)
+                                st.cache_data.clear()
+                                st.success("✅ 실제 수거 데이터 DB 반영 완료!")
                             else:
-                                # 기존 시뮬레이션 DB에 병합
                                 for cn, dv in [('학생수',0),('수거업체',"하영자원(본사 직영)"),('단가(원)',150),('재활용단가(원)',300),('사업장단가(원)',200),('상태',"정산대기")]:
                                     if cn not in df_up.columns:
                                         df_up[cn] = df_up['학교명'].map(STUDENT_COUNTS).fillna(0).astype(int) if cn=='학생수' else dv
-                                df_m = pd.concat([load_data(), df_up], ignore_index=True).drop_duplicates(subset=['날짜','학교명'], keep='last')
-                                df_m.to_csv(DB_FILE, index=False)
+                                save_sim_bulk(df_up)
                                 st.success("✅ 시뮬레이션 DB 반영 완료!")
                             time.sleep(1); st.rerun()
                     except Exception as e:
@@ -1900,11 +2039,11 @@ else:
             total_kg_real = df_school_real['음식물(kg)'].sum()
             total_co2_real = total_kg_real * CO2_FACTOR
             tree_real = int(total_co2_real / TREE_FACTOR)
-            st.markdown(f'<div style="background:linear-gradient(135deg,#11998e,#38ef7d);padding:20px;border-radius:12px;color:white;margin-bottom:20px;"><h4 style="margin:0;margin-bottom:10px;">🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)</h4><p style="margin:0;font-size:13px;opacity:0.9;">산정기준: 환경부 음식물폐기물 퇴비화 재활용 매립 회피 계수 {CO2_FACTOR} kgCO₂eq/kg</p><h2 style="margin:8px 0;">2025년 실제 수거량: {total_kg_real:,.0f} kg → CO₂ 감축: {total_co2_real:,.1f} kg (🌲 소나무 {tree_real:,}그루)</h2></div>', unsafe_allow_html=True)
+            render_esg_banner("🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)", total_kg_real, total_co2_real, tree_real, f"산정기준: 환경부 음식물폐기물 퇴비화 재활용 매립 회피 계수 {CO2_FACTOR} kgCO₂eq/kg")
         elif not df_school.empty:
             total_co2_school = df_school['탄소감축량(kg)'].sum()
             tree_count_school = int(total_co2_school / TREE_FACTOR)
-            st.markdown(f'<div style="background:linear-gradient(135deg,#11998e,#38ef7d);padding:20px;border-radius:12px;color:white;margin-bottom:20px;"><h4 style="margin:0;margin-bottom:10px;">🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)</h4><h2>누적 CO₂ 감축량: {total_co2_school:,.1f} kg (🌲 소나무 {tree_count_school}그루)</h2></div>', unsafe_allow_html=True)
+            render_esg_banner("🌱 우리 학교 ESG 환경 기여도 (교육청 제출용)", df_school['음식물(kg)'].sum(), total_co2_school, tree_count_school)
 
         has_data = not df_school_real.empty or not df_school.empty
         if has_data:
@@ -2096,11 +2235,7 @@ else:
                     total_tree = int(total_co2 / TREE_FACTOR)
                     total_supply = r_act['공급가'].sum()
                     # 시각화 카드
-                    ec1, ec2, ec3, ec4 = st.columns(4)
-                    with ec1: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">♻️ 총 재활용량</div><div class="metric-value-recycle">{total_kg:,.0f}kg</div></div>', unsafe_allow_html=True)
-                    with ec2: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌍 CO₂ 감축량</div><div class="metric-value-recycle">{total_co2:,.1f}kg</div></div>', unsafe_allow_html=True)
-                    with ec3: st.markdown(f'<div class="custom-card custom-card-green" style="text-align:center;"><div class="metric-title">🌲 소나무 식재 효과</div><div class="metric-value-recycle">{total_tree:,}그루</div></div>', unsafe_allow_html=True)
-                    with ec4: st.markdown(f'<div class="custom-card" style="text-align:center;"><div class="metric-title">💰 환경비용 절감</div><div class="metric-value-total">{total_supply:,.0f}원</div></div>', unsafe_allow_html=True)
+                    render_esg_cards(total_kg, total_co2, total_tree, total_supply)
                     # 월별 탄소감축 차트
                     st.write("---")
                     st.markdown("**📊 월별 탄소감축 추이**")
@@ -2560,26 +2695,16 @@ else:
                                 "음식물(kg)": food_w, "재활용(kg)": re_w, "사업장(kg)": biz_w,
                                 "단가(원)": 150, "재활용단가(원)": 300, "사업장단가(원)": 200, "상태": "실시간"}
                             save_data(new_data)
-                            real_row = pd.DataFrame([{
+                            real_row_dict = {
                                 "날짜": datetime.now().strftime("%Y-%m-%d"),
                                 "학교명": target, "음식물(kg)": food_w, "단가(원)": 162,
                                 "공급가": food_w * 162, "재활용방법": "퇴비화및비료생산",
                                 "재활용업체": "(주)혜인이엔씨", "월": datetime.now().month,
                                 "년도": str(datetime.now().year), "월별파일": f"{datetime.now().month}월",
                                 "수거업체": vendor_name, "수거기사": user_name, "수거시간": now_time
-                            }])
-                            try:
-                                existing = pd.read_csv(REAL_DATA_FILE)
-                                merged = pd.concat([existing, real_row], ignore_index=True)
-                            except Exception:
-                                merged = real_row
-                            merged.to_csv(REAL_DATA_FILE, index=False)
-                            # SQLite 동기화
-                            try:
-                                conn = sqlite3.connect(DB_PATH)
-                                real_row.to_sql('collection_data', conn, if_exists='append', index=False)
-                                conn.close()
-                            except Exception: pass
+                            }
+                            save_real_row(real_row_dict)
+                            st.cache_data.clear()
                             st.success(f"✅ {target} 수거 실적 전송 완료!")
                             st.caption(f"📡 {vendor_name} | {user_name} | {now_time} → 본사+행정실 실시간 반영")
                             time.sleep(1); st.rerun()
