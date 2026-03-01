@@ -39,21 +39,41 @@ def init_db():
          PRIMARY KEY(vendor, name))''')
     conn.commit(); conn.close()
 
-def db_get(table, where=None):
+def db_get(table, where_dict=None):
+    """안전한 SELECT (파라미터 바인딩)"""
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row
-    q = f"SELECT * FROM {table}" + (f" WHERE {where}" if where else "")
-    rows = conn.execute(q).fetchall(); conn.close()
+    # 테이블명 검증 (허용된 테이블만)
+    allowed_tables = {'price_data','contract_info','contract_data','schedule_data','today_schedule','customer_info'}
+    if table not in allowed_tables:
+        conn.close(); return []
+    if where_dict:
+        conditions = ' AND '.join([f"{k}=?" for k in where_dict.keys()])
+        q = f"SELECT * FROM {table} WHERE {conditions}"
+        rows = conn.execute(q, list(where_dict.values())).fetchall()
+    else:
+        q = f"SELECT * FROM {table}"
+        rows = conn.execute(q).fetchall()
+    conn.close()
     return [dict(r) for r in rows]
 
 def db_upsert(table, data):
+    """안전한 UPSERT (파라미터 바인딩)"""
     conn = sqlite3.connect(DB_PATH)
+    allowed_tables = {'price_data','contract_info','contract_data','schedule_data','today_schedule','customer_info'}
+    if table not in allowed_tables:
+        conn.close(); return
     cols = ','.join(data.keys()); placeholders = ','.join(['?']*len(data))
     conn.execute(f"REPLACE INTO {table} ({cols}) VALUES ({placeholders})", list(data.values()))
     conn.commit(); conn.close()
 
-def db_delete(table, where):
+def db_delete(table, where_dict):
+    """안전한 DELETE (파라미터 바인딩)"""
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(f"DELETE FROM {table} WHERE {where}")
+    allowed_tables = {'price_data','contract_info','contract_data','schedule_data','today_schedule','customer_info'}
+    if table not in allowed_tables:
+        conn.close(); return
+    conditions = ' AND '.join([f"{k}=?" for k in where_dict.keys()])
+    conn.execute(f"DELETE FROM {table} WHERE {conditions}", list(where_dict.values()))
     conn.commit(); conn.close()
 
 init_db()
@@ -255,7 +275,7 @@ def load_contracts_from_db():
     if rows:
         result = {}
         for r in rows:
-            items = db_get('contract_data', f"vendor='{r['vendor']}'")
+            items = db_get('contract_data', {'vendor': r['vendor']})
             result[r['vendor']] = {"대표":r['rep'],"사업자번호":r['biz_no'],"계약시작":r['start_date'],"계약만료":r['end_date'],"상태":r['status'],"품목단가":{i['item']:i['price'] for i in items}}
         return result
     result = {}
@@ -271,7 +291,7 @@ def save_contract_price(vendor, item, price):
 
 def load_customers_from_db(vendor):
     """DB에서 거래처 정보 로드 → dict 반환"""
-    rows = db_get('customer_info', f"vendor='{vendor}'")
+    rows = db_get('customer_info', {'vendor': vendor})
     if rows:
         return {r['name']: {"사업자번호":r['biz_no'],"상호":r['name'],"대표자":r['rep'],"주소":r['addr'],"업태":r['biz_type'],"종목":r['biz_item'],"이메일":r['email'],"구분":r['cust_type']} for r in rows}
     return None
@@ -282,11 +302,11 @@ def save_customer_to_db(vendor, name, info):
 
 def delete_customer_from_db(vendor, name):
     """거래처 1건 DB 삭제"""
-    db_delete('customer_info', f"vendor='{vendor}' AND name='{name}'")
+    db_delete('customer_info', {'vendor': vendor, 'name': name})
 
 def save_all_customers_to_db(vendor, detail_dict):
     """업체의 전체 거래처를 DB에 저장 (기존 삭제 후 전체 재삽입)"""
-    db_delete('customer_info', f"vendor='{vendor}'")
+    db_delete('customer_info', {'vendor': vendor})
     for name, info in detail_dict.items():
         save_customer_to_db(vendor, name, info)
 
@@ -406,8 +426,19 @@ ALL_ACCOUNTS.update(DRIVER_ACCOUNTS)
 ALL_ACCOUNTS.update(ADMIN_ACCOUNTS)
 ALL_ACCOUNTS.update(VENDOR_ADMIN_ACCOUNTS)
 
+def _hash_pw(pw):
+    """비밀번호 SHA-256 해시"""
+    return hashlib.sha256(str(pw).encode('utf-8')).hexdigest()
+
+# 최초 실행 시 평문 비밀번호를 해시로 변환 (한 번만 실행)
+if not st.session_state.get('_pw_hashed'):
+    for acc in ALL_ACCOUNTS.values():
+        if 'pw' in acc and len(str(acc['pw'])) < 64:  # 아직 해시 안 됨
+            acc['pw'] = _hash_pw(acc['pw'])
+    st.session_state['_pw_hashed'] = True
+
 def authenticate(user_id, password):
-    if user_id in ALL_ACCOUNTS and str(ALL_ACCOUNTS[user_id]["pw"]) == str(password):
+    if user_id in ALL_ACCOUNTS and ALL_ACCOUNTS[user_id]["pw"] == _hash_pw(password):
         return ALL_ACCOUNTS[user_id]
     return None
 
@@ -538,7 +569,7 @@ def load_data():
     try:
         df = pd.read_csv(DB_FILE)
         return df
-    except:
+    except Exception:
         return pd.DataFrame(columns=cols)
 
 def save_data(new_row):
@@ -1675,7 +1706,7 @@ else:
                     days_left = (exp - dt_cls.now()).days
                     if days_left <= 90:
                         st.markdown(f'<div class="alert-box">🔔 <b>[계약 갱신]</b> \'{vn}\' 계약 만료 {days_left}일 전 (만료일: {vd["계약만료"]})</div>', unsafe_allow_html=True)
-                except: pass
+                except Exception: pass
             # 업체 총괄 + 안전평가
             sorted_vendors = sorted(VENDOR_DATA.items(), key=lambda x: x[1]['안전점수'], reverse=True)
             if sorted_vendors:
@@ -2041,13 +2072,7 @@ else:
                     with doc_tab4:
                         st.info("💡 올바로시스템 실적보고서 (배출자용)")
                         st.caption("폐기물관리법 제38조 / 배출자 실적보고서")
-                        if not df_school_real.empty:
-                            sch_ab_years = sorted(df_school_real['년도'].unique(), reverse=True)
-                            sel_sch_ab_yr = st.selectbox("📅 년도", sch_ab_years, key="sch_ab_yr")
-                            sel_sch_ab_item = st.selectbox("📦 품목", ["전체","음식물","사업장","재활용"], key="sch_ab_item")
-                            st.download_button("📄 올바로 실적보고서 다운로드 (배출자용)",
-                                data=create_allbaro_report(df_school_real, 'emitter', school, sel_sch_ab_yr, sel_sch_ab_item),
-                                file_name=f"올바로_배출자_{school}_{sel_sch_ab_yr}.xlsx", use_container_width=True)
+                        render_allbaro_download(df_school_real, 'emitter', school, 'sch_ab')
                         st.write("---")
                         if st.button("🔗 올바로시스템 전자인계서 연동", type="primary", use_container_width=True):
                             with st.spinner("한국환경공단 서버 통신 중..."):
@@ -2294,15 +2319,7 @@ else:
             with edu_tabs[3]:
                 st.subheader("🔗 올바로시스템 실적보고서 (배출자용 - 교육청)")
                 st.caption("관할 학교 통합 폐기물 배출 실적보고서")
-                if not df_edu_real.empty:
-                    edu_ab_years = sorted(df_edu_real['년도'].unique(), reverse=True)
-                    sel_edu_ab_yr = st.selectbox("📅 년도", edu_ab_years, key="edu_ab_yr")
-                    sel_edu_ab_item = st.selectbox("📦 품목", ["전체","음식물","사업장","재활용"], key="edu_ab_item")
-                    st.download_button("📄 올바로 실적보고서 다운로드 (배출자용)",
-                        data=create_allbaro_report(df_edu_real, 'emitter', user_name, sel_edu_ab_yr, sel_edu_ab_item),
-                        file_name=f"올바로_배출자_{user_name}_{sel_edu_ab_yr}.xlsx", use_container_width=True)
-                else:
-                    st.info("실제 수거 데이터가 없습니다.")
+                render_allbaro_download(df_edu_real, 'emitter', user_name, 'edu_ab')
             # ★ 탭5: ESG 탄소중립 보고서 출력
             with edu_tabs[4]:
                 st.subheader("🌍 교육청 ESG 탄소중립 보고서")
@@ -2548,7 +2565,7 @@ else:
                             try:
                                 existing = pd.read_csv(REAL_DATA_FILE)
                                 merged = pd.concat([existing, real_row], ignore_index=True)
-                            except:
+                            except Exception:
                                 merged = real_row
                             merged.to_csv(REAL_DATA_FILE, index=False)
                             # SQLite 동기화
@@ -2556,7 +2573,7 @@ else:
                                 conn = sqlite3.connect(DB_PATH)
                                 real_row.to_sql('collection_data', conn, if_exists='append', index=False)
                                 conn.close()
-                            except: pass
+                            except Exception: pass
                             st.success(f"✅ {target} 수거 실적 전송 완료!")
                             st.caption(f"📡 {vendor_name} | {user_name} | {now_time} → 본사+행정실 실시간 반영")
                             time.sleep(1); st.rerun()
@@ -2754,19 +2771,8 @@ else:
         with va_t3:
             st.subheader(f"🔗 {va_vendor} 올바로 실적보고서 (수집운반업자용)")
             st.caption("폐기물관리법 제38조 / 수집·운반업자 실적보고서")
-            if not df_real.empty:
-                df_va_ab = df_real[df_real['학교명'].isin(va_schools)]
-                if not df_va_ab.empty:
-                    va_ab_years = sorted(df_va_ab['년도'].unique(), reverse=True)
-                    sel_va_ab_yr = st.selectbox("📅 년도", va_ab_years, key="va_ab_yr")
-                    sel_va_ab_item = st.selectbox("📦 품목", ["전체","음식물","사업장","재활용"], key="va_ab_item")
-                    st.download_button("📄 올바로 실적보고서 다운로드 (수집운반업자용)",
-                        data=create_allbaro_report(df_va_ab, 'transporter', va_vendor, sel_va_ab_yr, sel_va_ab_item),
-                        file_name=f"올바로_수집운반_{va_vendor}_{sel_va_ab_yr}.xlsx", use_container_width=True)
-                else:
-                    st.info("담당 학교의 수거 데이터가 없습니다.")
-            else:
-                st.info("실제 수거 데이터가 없습니다.")
+            df_va_ab = df_real[df_real['학교명'].isin(va_schools)] if not df_real.empty else pd.DataFrame()
+            render_allbaro_download(df_va_ab, 'transporter', va_vendor, f'va_ab_{va_vendor}')
 
         # ===== 탭6: 거래처 리스트 + 수거데이터 업로드 =====
         with va_t6:
@@ -2913,18 +2919,7 @@ else:
                     st.session_state[f'schedule_{va_vendor}'] = new_today
                     st.success("✅ 오늘 일정 저장!"); st.rerun()
             with va_sched_tabs[1]:
-                has_m = False
-                for m in range(1, 13):
-                    sk = f"monthly_sched_{va_vendor}_{m}"
-                    if sk in st.session_state:
-                        has_m = True
-                        sd = st.session_state[sk]
-                        with st.expander(f"📅 {m}월", expanded=(m==CURRENT_MONTH)):
-                            st.write(f"**수거 요일:** {', '.join(sd.get('요일',[]))}")
-                            st.write(f"**수거 품목:** {', '.join(sd.get('품목',[]))}")
-                            st.write(f"**대상 학교:** {', '.join(sd.get('학교',[]))}")
-                if not has_m:
-                    st.info("등록된 월별 일정이 없습니다.")
+                render_monthly_schedule_view(va_vendor, CURRENT_MONTH, show_delete=False, show_driver=False, key_suffix=f"va_{va_vendor}")
                 # 월별 일정 직접 등록
                 st.write("---")
                 st.markdown("**🗓️ 월별 일정 등록/수정**")
