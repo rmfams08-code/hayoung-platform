@@ -430,16 +430,22 @@ def _hash_pw(pw):
     """비밀번호 SHA-256 해시"""
     return hashlib.sha256(str(pw).encode('utf-8')).hexdigest()
 
-# 최초 실행 시 평문 비밀번호를 해시로 변환 (한 번만 실행)
-if not st.session_state.get('_pw_hashed'):
-    for acc in ALL_ACCOUNTS.values():
-        if 'pw' in acc and len(str(acc['pw'])) < 64:  # 아직 해시 안 됨
-            acc['pw'] = _hash_pw(acc['pw'])
-    st.session_state['_pw_hashed'] = True
-
 def authenticate(user_id, password):
-    if user_id in ALL_ACCOUNTS and ALL_ACCOUNTS[user_id]["pw"] == _hash_pw(password):
-        return ALL_ACCOUNTS[user_id]
+    """비밀번호 검증 (입력값을 해시하여 저장된 해시와 비교, 또는 평문 비교 후 해시 마이그레이션)"""
+    if user_id not in ALL_ACCOUNTS:
+        return None
+    acc = ALL_ACCOUNTS[user_id]
+    stored_pw = str(acc.get('pw',''))
+    hashed_input = _hash_pw(password)
+    # 이미 해시 저장된 경우 (64자 hex)
+    if len(stored_pw) == 64:
+        if stored_pw == hashed_input:
+            return acc
+    else:
+        # 평문 비교 후, 일치하면 해시로 마이그레이션
+        if stored_pw == str(password):
+            acc['pw'] = hashed_input  # 해시로 업그레이드
+            return acc
     return None
 
 # ==========================================
