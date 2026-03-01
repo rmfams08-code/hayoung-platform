@@ -16,6 +16,8 @@ from datetime import datetime, timedelta
 # ★ SQLite DB (시세/계약/일정 영구 저장)
 # ==========================================
 DB_PATH = "hayoung_platform.db"
+DB_FILE = "hayoung_data_v5.csv"
+REAL_DATA_FILE = "hayoung_real_2025.csv"
 
 def _hash_pw(pw):
     """비밀번호 SHA-256 해시"""
@@ -621,8 +623,6 @@ st.markdown("""
 # ==========================================
 # 2. 데이터 영구 저장 및 실시간 연산 (실제 수거 데이터 통합)
 # ==========================================
-DB_FILE = "hayoung_data_v5.csv"
-REAL_DATA_FILE = "hayoung_real_2025.csv"
 
 # ★ 탄소 감축 계수 (환경부 기준)
 # 음식물폐기물 퇴비화 재활용 시 매립 대비 CO₂ 감축: 0.587 kgCO₂eq/kg
